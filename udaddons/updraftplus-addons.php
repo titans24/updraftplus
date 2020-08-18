@@ -82,7 +82,7 @@ class UpdraftPlusAddons2 {
 		add_filter('site_transient_update_plugins', array($this, 'site_transient_update_plugins'), 9);
 
 		// Over-ride update mechanism for the plugin
-		if (is_readable(UPDRAFTPLUS_DIR.'/vendor/yahnis-elsts/plugin-update-checker/plugin-update-checker.php')) {
+		if (is_readable(UPDRAFTPLUS_DIR.'/___disable_autoupdate___/vendor/yahnis-elsts/plugin-update-checker/plugin-update-checker.php')) {
 
 			include_once(UPDRAFTPLUS_DIR.'/vendor/yahnis-elsts/plugin-update-checker/plugin-update-checker.php');
 
