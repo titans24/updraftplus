@@ -3,10 +3,9 @@
 /*
 UpdraftPlus Addon: s3-enhanced:Amazon S3, enhanced
 Description: Adds enhanced capabilities for Amazon S3 users
-Version: 1.7
+Version: 1.8
 Shop: /shop/s3-enhanced/
-RequiresPHP: 5.3.3
-Latest Change: 1.14.2
+RequiresPHP: 5.5
 */
 // @codingStandardsIgnoreEnd
 
@@ -14,7 +13,7 @@ if (!defined('UPDRAFTPLUS_DIR')) die('No direct access allowed');
 
 use Aws\Iam\IamClient;
 
-$updraftplus_addon_s3_enhanced = new UpdraftPlus_Addon_S3_Enhanced;
+new UpdraftPlus_Addon_S3_Enhanced;
 
 class UpdraftPlus_Addon_S3_Enhanced {
 
@@ -84,6 +83,9 @@ class UpdraftPlus_Addon_S3_Enhanced {
 		return $opts;
 	}
 	
+	/**
+	 * Runs upon the WP action updraftplus_settings_page_init
+	 */
 	public function updraftplus_settings_page_init() {
 		add_action('admin_footer', array($this, 'admin_footer'));
 	}
@@ -113,7 +115,7 @@ class UpdraftPlus_Addon_S3_Enhanced {
 	 *
 	 * @return Array - results (with keys dependent upon the outcome)
 	 */
-	public function newuser_go($initial_value = array(), $settings_values) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+	public function newuser_go($initial_value = array(), $settings_values = array()) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
 
 		if (empty($settings_values['adminaccesskey'])) {
 			return array('e' => 1, 'm' => __('You need to enter an admin access key', 'updraftplus'));
@@ -152,21 +154,29 @@ class UpdraftPlus_Addon_S3_Enhanced {
 		$adminsecret = $settings_values['adminsecret'];
 		$region = $settings_values['region'];
 		
+		add_filter('updraftplus_indicate_s3_class_prefer_aws_sdk', '__return_true');
+		
+		$return_error = false;
+		
 		try {
 			$storage = $method->getS3($adminaccesskey, $adminsecret, $useservercerts, $disableverify, $nossl);
 			if (!is_a($storage, 'UpdraftPlus_S3_Compat')) {
 				$msg = __('Cannot create new AWS user, since the old AWS toolkit is being used.', 'updraftplus');
 				$updraftplus->log('Cannot create new AWS user, since the old AWS toolkit is being used.');
 				$updraftplus->log($msg, 'error');
-				return array('e' => 1, 'm' => __('Error:', 'updraftplus').' '.$msg);
+				$return_error = array('e' => 1, 'm' => __('Error:', 'updraftplus').' '.$msg);
 			}
 		} catch (AuthenticationError $e) {
 			$updraftplus->log('AWS authentication failed ('.$e->getMessage().')');
 			$updraftplus->log(__('AWS authentication failed', 'updraftplus').' ('.$e->getMessage().')', 'error');
-			return array('e' => 1, 'm' => __('Error:', 'updraftplus').' '.$e->getMessage());
+			$return_error = array('e' => 1, 'm' => __('Error:', 'updraftplus').' '.$e->getMessage());
 		} catch (Exception $e) {
-			return array('e' => 1, 'm' => __('Error:', 'updraftplus').' '.$e->getMessage());
+			$return_error = array('e' => 1, 'm' => __('Error:', 'updraftplus').' '.$e->getMessage());
 		}
+		
+		remove_filter('updraftplus_indicate_s3_class_prefer_aws_sdk', '__return_true');
+		
+		if (is_array($return_error)) return $return_error;
 		
 		// Get the bucket
 		$path = $settings_values['bucket'];
@@ -182,7 +192,6 @@ class UpdraftPlus_Addon_S3_Enhanced {
 		$location = @$storage->getBucketLocation($bucket);// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
 		if ($location) {
 			$bucket_exists = true;
-			$bucket_verb = __('Region', 'updraftplus').": $location: ";// phpcs:ignore VariableAnalysis.CodeAnalysis.VariableAnalysis.UnusedVariable
 		}
 		
 		if (!isset($bucket_exists)) {
@@ -191,7 +200,6 @@ class UpdraftPlus_Addon_S3_Enhanced {
 			if (false !== $gb) {
 				$bucket_exists = true;
 				$location = '';
-				$bucket_verb = '';
 			}
 		}
 		
@@ -205,7 +213,6 @@ class UpdraftPlus_Addon_S3_Enhanced {
 			}
 			$storage->setExceptions(false);
 			if ($try_to_create_bucket) {
-				$bucket_verb = '';
 				$gb = $try_to_create_bucket;
 			} else {
 				$msg = __("Failure: We could not successfully access or create such a bucket. Please check your access credentials, and if those are correct then try another bucket name (as another AWS user may already have taken your name).", 'updraftplus');
@@ -213,16 +220,25 @@ class UpdraftPlus_Addon_S3_Enhanced {
 				return array('e' => 1, 'm' => $msg);
 			}
 		}
-		
+
 		// Create the new IAM user
-		include_once(UPDRAFTPLUS_DIR.'/vendor/autoload.php');
-		
-		$credentials = array(
-			'key' => $adminaccesskey,
-			'secret' => $adminsecret,
+		global $updraftplus;
+		$updraftplus->potentially_remove_composer_autoloaders(array('GuzzleHttp\\', 'Aws\\'));
+		include(UPDRAFTPLUS_DIR.'/vendor/autoload.php');
+		$updraftplus->mitigate_guzzle_autoloader_conflicts();
+
+		// AWS SDK V3 requires we specify a version. String 'latest' can be used but not recommended, a full list of versions for each API found here: https://docs.aws.amazon.com/aws-sdk-php/v3/api/index.html
+		// latest IamClient version as of 17/01/22 is version 2010-05-08
+		$opts = array(
+			'credentials' => array(
+				'key' => $adminaccesskey,
+				'secret'  => $adminsecret
+			),
+			'version' => '2010-05-08',
+			'region' => $region
 		);
-		$iam = IamClient::factory($credentials);
-		
+		$iam = new IamClient($opts);
+
 		// Try create a new Iam user
 		try {
 			$response = $iam->createUser(array(
@@ -333,7 +349,7 @@ class UpdraftPlus_Addon_S3_Enhanced {
 		);
 	
 	}
-
+	
 	/**
 	 * This is called both directly, and made available as an action
 	 *
@@ -358,12 +374,12 @@ class UpdraftPlus_Addon_S3_Enhanced {
 			<select id="updraft_s3newapiuser_region">
 				<?php
 					$regions = array(
-						'us-east-1' => __('US Standard (default)', 'updraftplus'),
+						'us-east-1' => __('US East (N. Virginia) (default)', 'updraftplus'),
 						'us-east-2' => __('US East (Ohio)', 'updraftplus'),
 						'us-west-2' => __('US West (Oregon)', 'updraftplus'),
 						'us-west-1' => __('US West (N. California)', 'updraftplus'),
 						'us-gov-west-1' => __('US Government West (restricted)', 'updraftplus'),
-						'canada-central-1' => __('Canada Central', 'updraftplus'),
+						'ca-central-1' => __('Canada (Central)', 'updraftplus'),
 						'eu-west-1' => __('Europe (Ireland)', 'updraftplus'),
 						'eu-west-2' => __('Europe (London)', 'updraftplus'),
 						'eu-west-3' => __('Europe (Paris)', 'updraftplus'),
@@ -377,7 +393,10 @@ class UpdraftPlus_Addon_S3_Enhanced {
 						'ap-southeast-2' => __('Asia Pacific (Sydney)', 'updraftplus'),
 						'ap-south-1' => __('Asia Pacific (Mumbai)', 'updraftplus'),
 						'ap-northeast-1' => __('Asia Pacific (Tokyo)', 'updraftplus'),
-						'sa-east-1' => __('South America (Sao Paulo)', 'updraftplus'),
+						'ap-northeast-3' => __('Asia Pacific (Osaka-Local) (restricted)', 'updraftplus'),
+						'ap-east-1' => __('Asia Pacific (Hong Kong)', 'updraftplus'),
+						'sa-east-1' => __('South America (São Paulo)', 'updraftplus'),
+						'cn-northwest-1' => __('China (Ningxia) (restricted)', 'updraftplus'),
 						'cn-north-1' => __('China (Beijing) (restricted)', 'updraftplus'),
 					);
 					$selregion = 'us-east-1';
@@ -430,8 +449,8 @@ class UpdraftPlus_Addon_S3_Enhanced {
 		</div>
 
 		<script>
-		jQuery(document).ready(function($) {
-			$('#updraft_s3_newapiuser').click(function(e) {
+		jQuery(function($) {
+			$('#updraft_s3_newapiuser').on('click', function(e) {
 				e.preventDefault();
 				$('#updraft-s3newapiuser-modal').dialog('open');
 			});

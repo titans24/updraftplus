@@ -11,7 +11,7 @@ Latest Change: 1.12.19
 
 if (!defined('UPDRAFTPLUS_DIR')) die('No direct access allowed');
 
-$updraftplus_addons_importer = new UpdraftPlus_Addons_Importer;
+new UpdraftPlus_Addons_Importer;
 
 class UpdraftPlus_Addons_Importer {
 
@@ -63,7 +63,7 @@ class UpdraftPlus_Addons_Importer {
 		return $index;
 	}
 	
-	public function if_foreign_then_premium_message($msg) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+	public function if_foreign_then_premium_message() {
 
 		$plugins = $this->accept_archivename(array());
 		$supported = '';

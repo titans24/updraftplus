@@ -116,7 +116,7 @@ class UpdraftPlus_Addons_RemoteStorage_backblaze extends UpdraftPlus_RemoteStora
 	 *
 	 * @return Boolean|WP_Error
 	 */
-	public function chunked_upload($file, $fp, $chunk_index, $upload_size = 0, $upload_start = 0, $upload_end = 0, $total_file_size = 0) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- Filter use
+	public function chunked_upload($file, $fp, $chunk_index, $upload_size = 0, $upload_start = 0, $upload_end = 0, $total_file_size = 0) {// phpcs:ignore VariableAnalysis.CodeAnalysis.VariableAnalysis.UnusedVariable -- Filter use
 	
 		// Already done? This is not checked if we are sent data directly, as that implies forcing.
 		if (is_resource($fp) && $upload_start < $this->_uploaded_size) return 1;
@@ -325,7 +325,7 @@ class UpdraftPlus_Addons_RemoteStorage_backblaze extends UpdraftPlus_RemoteStora
 	 *
 	 * @return Boolean|Integer - success/failure, or a byte counter of how much has been downloaded. Exceptions can also be thrown for errors.
 	 */
-	public function do_download($file, $fullpath, $start_offset) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- Filter use
+	public function do_download($file, $fullpath) {// phpcs:ignore VariableAnalysis.CodeAnalysis.VariableAnalysis.UnusedVariable -- Filter use
 		global $updraftplus;
 
 		$remote_files = $this->do_listfiles($file);
@@ -351,11 +351,9 @@ class UpdraftPlus_Addons_RemoteStorage_backblaze extends UpdraftPlus_RemoteStora
 	 *
 	 * @param String $file	  - the file (basename) to be downloaded
 	 * @param Array	 $headers - supplied headers
-	 * @param Mixed	 $data	  - pass-back from our call to the API (which we don't use)
-	 *
 	 * @return String - the data downloaded
 	 */
-	public function chunked_download($file, $headers, $data) {
+	public function chunked_download($file, $headers) {
 
 		// $curl_options = array();
 		// if (is_array($headers) && !empty($headers['Range']) && preg_match('/bytes=(.*)$/', $headers['Range'], $matches)) {
@@ -400,11 +398,11 @@ class UpdraftPlus_Addons_RemoteStorage_backblaze extends UpdraftPlus_RemoteStora
 	/**
 	 * Delete an indicated file from remote storage
 	 *
-	 * @param String $file - the file (basename) to delete
+	 * @param Array $files - the files (basename) to delete
 	 *
-	 * @return Boolean - success/failure status of the delete operation. Throwing exception is also permitted.
+	 * @return Boolean|Array - success/failure status of the delete operation. Throwing exception is also permitted.
 	 */
-	public function do_delete($file) {
+	public function do_delete($files) {
 	
 		$opts = $this->options;
 
@@ -412,10 +410,28 @@ class UpdraftPlus_Addons_RemoteStorage_backblaze extends UpdraftPlus_RemoteStora
 
 		$backup_path = empty($opts['backup_path']) ? '' : trailingslashit($opts['backup_path']);
 		
-		$result = $storage->deleteFile(array(
-			'FileName'   => $backup_path.$file,
-			'BucketName' => $opts['bucket_name'],
-		));
+		try {
+			if (count($files) > 1) {
+				$multipleFiles = array();
+				foreach ($files as $file) {
+					$multipleFiles[] = array(
+						'FileName'   => $backup_path.$file,
+						'BucketName' => $opts['bucket_name']
+					);
+				}
+				$result = $storage->deleteMultipleFiles($multipleFiles, $opts['bucket_name'], $backup_path);
+			} else {
+				$fileName = $files[0];
+				$result = $storage->deleteFile(array(
+					'FileName'   => $backup_path.$fileName,
+					'BucketName' => $opts['bucket_name'],
+				));
+			}
+		} catch (UpdraftPlus_Backblaze_NotFoundException $e) {
+			// This exception should only be possible on the single file delete path
+			$this->log("$fileName: file not found (so likely already deleted)");
+			return true;
+		}
 
 		return $result;
 		
@@ -448,7 +464,7 @@ class UpdraftPlus_Addons_RemoteStorage_backblaze extends UpdraftPlus_RemoteStora
 		
 		$files = array();
 
-		foreach ($remote_files as $k => $file) {
+		foreach ($remote_files as $file) {
 			$file_name = $file->getName();
 			if ($backup_path && 0 !== strpos($file_name, $backup_path)) continue;
 			$files[] = array(
@@ -561,7 +577,7 @@ class UpdraftPlus_Addons_RemoteStorage_backblaze extends UpdraftPlus_RemoteStora
 	 */
 	public function get_supported_features() {
 		// This options format is handled via only accessing options via $this->get_options()
-		return array('multi_options', 'config_templates', 'multi_storage');
+		return array('multi_options', 'config_templates', 'multi_storage', 'conditional_logic', 'multi_delete');
 	}
 	
 	/**
@@ -587,7 +603,7 @@ class UpdraftPlus_Addons_RemoteStorage_backblaze extends UpdraftPlus_RemoteStora
 	 *
 	 * @return UpdraftPlus_Backblaze_CurlClient|WP_Error - the storage object. It should also be stored as $this->storage.
 	 */
-	public function do_bootstrap($opts, $connect = true) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- Filter use
+	public function do_bootstrap($opts) {
 		$storage = $this->get_storage();
 
 		if (!empty($storage) && !is_wp_error($storage)) return $storage;

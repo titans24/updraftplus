@@ -42,6 +42,13 @@ class UpdraftPlus_Addons_RemoteStorage_azure extends UpdraftPlus_RemoteStorage_A
 		
 		$account_name = $opts['account_name']; // Used here only for logging
 		
+		// If the user is using OneDrive for Germany option
+		if (isset($opts['endpoint']) && 'blob.core.cloudapi.de' === $opts['endpoint']) {
+			$odg_warning = sprintf(__('Due to the shutdown of the %1$s endpoint, support for %1$s will be ending soon. You will need to migrate to the Global endpoint in your UpdraftPlus settings. For more information, please see: %2$s', 'updraftplus'), 'Azure Germany', 'https://www.microsoft.com/en-us/cloud-platform/germany-cloud-regions');
+			// We only want to log this once per backup job
+			$this->log($odg_warning, 'warning', 'azure_de_migrate');
+		}
+		
 		// Create/check container
 		$container_name = $opts['container'];
 		$container = $this->create_container($container_name);
@@ -166,7 +173,7 @@ class UpdraftPlus_Addons_RemoteStorage_azure extends UpdraftPlus_RemoteStorage_A
 	 * @param  string $upload_end   This is the Upload end positions
 	 * @return boolean
 	 */
-	public function chunked_upload($file, $fp, $chunk_index, $upload_size, $upload_start, $upload_end) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- Filter use
+	public function chunked_upload($file, $fp, $chunk_index, $upload_size, $upload_start, $upload_end) {// phpcs:ignore VariableAnalysis.CodeAnalysis.VariableAnalysis.UnusedVariable -- Filter use
 		$opts = $this->options;
 		$directory = !empty($opts['directory']) ? trailingslashit($opts['directory']) : "";
 		$storage = $this->get_storage();
@@ -220,7 +227,7 @@ class UpdraftPlus_Addons_RemoteStorage_azure extends UpdraftPlus_RemoteStorage_A
 		if (!is_array($block_ids)) return false;
 
 		$blocks = array();
-		foreach ($block_ids as $chunk => $b_id) {
+		foreach ($block_ids as $b_id) {
 			$block = new WindowsAzure\Blob\Models\Block();
 			$block->setBlockId(base64_encode($b_id));
 			$block->setType('Uncommitted');
@@ -240,7 +247,7 @@ class UpdraftPlus_Addons_RemoteStorage_azure extends UpdraftPlus_RemoteStorage_A
 		return true;
 	}
 
-	public function do_download($file, $fullpath, $start_offset) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- Filter use
+	public function do_download($file, $fullpath) {// phpcs:ignore VariableAnalysis.CodeAnalysis.VariableAnalysis.UnusedVariable -- Filter use
 		global $updraftplus;
 
 		$opts = $this->options;
@@ -306,7 +313,7 @@ class UpdraftPlus_Addons_RemoteStorage_azure extends UpdraftPlus_RemoteStorage_A
 			
 			// check if needed blob is there
 			foreach ($blobs as $blob) {
-				if (basename($blob['name']) == $file) {
+				if (isset($blob['name']) && basename($blob['name']) == $file) {
 					try {
 						// if match, delete file
 						$storage->deleteBlob($opts['container'], $azure_path);
@@ -396,7 +403,7 @@ class UpdraftPlus_Addons_RemoteStorage_azure extends UpdraftPlus_RemoteStorage_A
 			$exists = $this->create_container($container_name);
 
 			if (is_wp_error($exists)) {
-				foreach ($exists->get_error_messages() as $key => $msg) {
+				foreach ($exists->get_error_messages() as $msg) {
 					echo "$msg\n";
 				}
 				return false;
@@ -445,7 +452,7 @@ class UpdraftPlus_Addons_RemoteStorage_azure extends UpdraftPlus_RemoteStorage_A
 	 */
 	public function get_supported_features() {
 		// This options format is handled via only accessing options via $this->get_options()
-		return array('multi_options', 'config_templates', 'multi_storage');
+		return array('multi_options', 'config_templates', 'multi_storage', 'conditional_logic');
 	}
 
 	/**
@@ -462,7 +469,7 @@ class UpdraftPlus_Addons_RemoteStorage_azure extends UpdraftPlus_RemoteStorage_A
 		);
 	}
 	
-	public function do_bootstrap($opts, $connect = true) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- Filter use
+	public function do_bootstrap($opts) {
 
 		// The Azure SDK requires PEAR modules - specifically,  HTTP_Request2, Mail_mime, and Mail_mimeDecode; however, an analysis of the used code paths shows that we only need HTTP_Request2
 		if (false === strpos(get_include_path(), UPDRAFTPLUS_DIR.'/includes/PEAR')) set_include_path(UPDRAFTPLUS_DIR.'/includes/PEAR'.PATH_SEPARATOR.get_include_path());

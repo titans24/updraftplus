@@ -11,7 +11,7 @@ Latest Change: 1.12.3
 
 if (!defined('UPDRAFTPLUS_DIR')) die('No direct access allowed');
 
-$updraftplus_addon_fixtime = new UpdraftPlus_AddOn_FixTime;
+new UpdraftPlus_AddOn_FixTime;
 
 class UpdraftPlus_AddOn_FixTime {
 
@@ -339,7 +339,7 @@ class UpdraftPlus_AddOn_FixTime {
 	public function admin_footer_extraretain_js() {
 		?>
 		<script>
-		jQuery(document).ready(function($) {
+		jQuery(function($) {
 			<?php
 				$this->javascript_retain_rules('files');
 				$this->javascript_retain_rules('db');
@@ -353,11 +353,11 @@ class UpdraftPlus_AddOn_FixTime {
 				add_rule('db', rule.after_howmany, rule.after_period, rule.every_howmany, rule.every_period);
 			});
 					
-			$('#updraft_retain_db_addnew').click(function(e) {
+			$('#updraft_retain_db_addnew').on('click', function(e) {
 				e.preventDefault();
 				add_rule('db', 12, 604800, 1, 604800);
 			});
-			$('#updraft_retain_files_addnew').click(function(e) {
+			$('#updraft_retain_files_addnew').on('click', function(e) {
 				e.preventDefault();
 				add_rule('files', 12, 604800, 1, 604800);
 			});

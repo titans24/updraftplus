@@ -11,7 +11,7 @@ Latest Change: 1.14.3
 
 if (!defined('UPDRAFTPLUS_DIR')) die('No direct access allowed');
 
-$updraftplus_addons_morefiles = new UpdraftPlus_Addons_MoreFiles;
+new UpdraftPlus_Addons_MoreFiles;
 
 class UpdraftPlus_Addons_MoreFiles {
 
@@ -157,7 +157,7 @@ class UpdraftPlus_Addons_MoreFiles {
 			?>
 
 			<script>
-				jQuery('#updraft_restore_wpcore').change(function(){
+				jQuery('#updraft_restore_wpcore').on('change', function(){
 					if (jQuery('#updraft_restore_wpcore').is(':checked')) {
 						jQuery('#updraft_restorer_wpcoreoptions').slideDown();
 					} else {
@@ -187,7 +187,15 @@ class UpdraftPlus_Addons_MoreFiles {
 		return $arr;
 	}
 
-	public function checkzip_wpcore($zipfile, &$mess, &$warn, &$err) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+	/**
+	 * N.B. &$err is also available as a fourth parameter if needed
+	 *
+	 * @param string $zipfile
+	 * @param array  $mess
+	 * @param array  $warn
+	 * @return void
+	 */
+	public function checkzip_wpcore($zipfile, &$mess, &$warn) {
 		if (!empty($this->wpcore_foundyet) && 3 == $this->wpcore_foundyet) return;
 
 		if (!is_readable($zipfile)) {
@@ -297,6 +305,8 @@ class UpdraftPlus_Addons_MoreFiles {
 		$ret .= ' '.__('Be careful what you select - if you select / then it really will try to create a zip containing your entire webserver.', 'updraftplus');
 
 		$ret .= '</p>';
+
+		$ret .= '<p id="updraft_include_more_paths_error"></p>';
 
 		$ret .= '<div id="updraft_include_more_paths">';
 
@@ -446,7 +456,7 @@ class UpdraftPlus_Addons_MoreFiles {
 		if (!is_array($more_map)) $more_map = array();
 		if (!is_array($more_locations)) $more_locations = array();
 
-		foreach ($whichdirs as $i => $whichdir) {
+		foreach ($whichdirs as $whichdir) {
 
 			// Actually create the thing
 			$dirlist = $this->backup_more_dirlist($whichdir);
@@ -760,9 +770,9 @@ class UpdraftPlus_Addons_MoreFiles {
 	 * @param Array   $info      - information about the backup being restored
 	 * @param Array   $mess      - array of informational-level messages
 	 * @param Array   $warn      - array of warning-level messages
-	 * @param Array   $err       - array of error-level messages
+	 * N.B. An extra parameter $err is also available after $warn
 	 */
-	public function restore_all_downloaded_postscan($backups, $timestamp, $entities, &$info, &$mess, &$warn, &$err) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+	public function restore_all_downloaded_postscan($backups, $timestamp, $entities, &$info, &$mess, &$warn) {
 		if (!isset($entities['more']) || !isset($backups[$timestamp]['more'])) return;
 
 		$not_found = false;
@@ -888,7 +898,7 @@ class UpdraftPlus_Addons_MoreFiles {
 	public function admin_footer_more_files_js() {
 		?>
 		<script>
-		jQuery(document).ready(function() {
+		jQuery(function() {
 			<?php
 				$paths = UpdraftPlus_Options::get_updraft_option('updraft_include_more_path');
 				if (!is_array($paths)) $paths = array($paths);
@@ -902,7 +912,7 @@ class UpdraftPlus_Addons_MoreFiles {
 			var edit = "<?php echo $edit; ?>";
 			var remove = "<?php echo $remove; ?>";
 			var placeholder = "<?php echo $placeholder; ?>";
-			jQuery('#updraft_include_more').click(function() {
+			jQuery('#updraft_include_more').on('click', function() {
 				if (jQuery('#updraft_include_more').is(':checked')) {
 					jQuery('#updraft_include_more_options').slideDown();
 				} else {
@@ -910,7 +920,7 @@ class UpdraftPlus_Addons_MoreFiles {
 				}
 			});
 
-			jQuery('#updraft_include_more_paths_another').click(function(e) {
+			jQuery('#updraft_include_more_paths_another').on('click', function(e) {
 				e.preventDefault();
 				updraftplus_morefiles_lastind++;
 				jQuery('#updraft_include_more_paths').append('<div class="updraftplus-morefiles-row"><label for="updraft_include_more_path_' + updraftplus_morefiles_lastind + '"></label><input type="text" class="updraft_more_path_editing" id="updraft_include_more_path_' + updraftplus_morefiles_lastind + '" name="updraft_include_more_path[]" size="54" placeholder="' + placeholder + '" value="" title="' + placeholder + '" readonly/> <a href="#" title="' + edit + '" class="updraftplus-morefiles-row-edit dashicons dashicons-edit hidden-in-updraftcentral"></a> <a href="#" title="' + remove + '" class="updraftplus-morefiles-row-delete dashicons dashicons-no"></a></div>');
@@ -936,10 +946,25 @@ class UpdraftPlus_Addons_MoreFiles {
 						"multiple": false,
 						"data": function (nodeid, callback) {
 							updraft_send_command('get_jstree_directory_nodes', {entity:entity, node:nodeid, path:path, drop_directory:drop_directory, page:page}, function(response) {
-								callback.call(this, response.nodes);
+								if (response.hasOwnProperty('error')) {
+									jQuery('#updraft_include_more_paths_error').text(response.error);
+								} else {
+									jQuery('#updraft_include_more_paths_error').text('');
+									callback.call(this, response.nodes);
+								}
 							});
 						}
-					}
+					},
+					'plugins' : ['sort','types'],
+					'sort' : function(a, b) {
+						a1 = this.get_node(a);
+						b1 = this.get_node(b);
+						if (a1.icon == b1.icon){
+							return (a1.text > b1.text) ? 1 : -1;
+						} else {
+							return (a1.icon < b1.icon) ? 1 : -1;
+						}
+					},
 				});
 
 				// Detect change on the tree and update the input that has been marked as editing
@@ -965,7 +990,7 @@ class UpdraftPlus_Addons_MoreFiles {
 			});
 
 			// Cancel the selection and clean up the UI
-			jQuery('#updraft_jstree_cancel_options').click(function(e) {
+			jQuery('#updraft_jstree_cancel_options').on('click', function(e) {
 				e.preventDefault();
 				// reset value on cancel
 				jQuery('.updraft_more_path_editing').val(jQuery('.updraft_more_path_editing').data('previous-value'));
@@ -979,7 +1004,7 @@ class UpdraftPlus_Addons_MoreFiles {
 			});
 
 			// Grabs all selected paths and outputs them to the page ready to be saved then updates the UI and removes the tree object
-			jQuery('#updraft_jstree_confirm_options').click(function(e) {
+			jQuery('#updraft_jstree_confirm_options').on('click', function(e) {
 				e.preventDefault();
 				cleanup_jstree_ui('options');
 			});
@@ -1010,7 +1035,7 @@ class UpdraftPlus_Addons_MoreFiles {
 			});
 
 			// Removes the current tree object and creates a new tree one directory above
-			jQuery('#updraft_parent_directory_options').click(function(e) {
+			jQuery('#updraft_parent_directory_options').on('click', function(e) {
 				e.preventDefault();
 				jstree_parent_directory('options');
 			});
@@ -1021,7 +1046,7 @@ class UpdraftPlus_Addons_MoreFiles {
 			 * @param {string} page - the page this jstree is being created on
 			 */
 			function jstree_parent_directory(page) {
-				var parent_node_id = jQuery('#updraft_more_files_jstree_'+page+' ul > li:first').attr('id');
+				var parent_node_id = jQuery('#updraft_more_files_jstree_'+page+' ul > li').first().attr('id');
 				jQuery('#updraft_more_files_jstree_'+page).jstree("destroy").empty();
 				more_files_jstree('filebrowser', parent_node_id, true, page);
 			}

@@ -3,12 +3,11 @@
 /*
 UpdraftPlus Addon: googlecloud:Google Cloud Support
 Description: Google Cloud Support
-Version: 1.4
+Version: 1.5
 Shop: /shop/googlecloud/
 Include: includes/googlecloud
 IncludePHP: methods/addon-base-v2.php
 RequiresPHP: 5.2.4
-Latest Change: 1.16.7
 */
 // @codingStandardsIgnoreEnd
 
@@ -30,6 +29,12 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 	private $storage_classes;
 
 	private $bucket_locations;
+
+	// This can get over-ridden by a user-defined constant
+	private $client_id = '916618189494-u3ehb1fl7u3meb63nb2b4fqi0r9pcfe2.apps.googleusercontent.com';
+
+	// This can get over-ridden by a user-defined constant
+	private $callback_url = 'https://auth.updraftplus.com/auth/googlecloud';
 
 	public function __construct() {
 		// 3rd parameter: chunking? 4th: Test button?
@@ -60,6 +65,10 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 		parent::__construct('googlecloud', 'Google Cloud Storage', true, true);
 
 		if (defined('UPDRAFTPLUS_UPLOAD_CHUNKSIZE') && UPDRAFTPLUS_UPLOAD_CHUNKSIZE>0) $this->chunk_size = max(UPDRAFTPLUS_UPLOAD_CHUNKSIZE, 512*1024);
+
+		if (defined('UPDRAFTPLUS_GOOGLECLOUD_CLIENT_ID')) $this->client_id = UPDRAFTPLUS_GOOGLECLOUD_CLIENT_ID;
+
+		if (defined('UPDRAFTPLUS_GOOGLECLOUD_CALLBACK_URL')) $this->callback_url = UPDRAFTPLUS_GOOGLECLOUD_CALLBACK_URL;
 	}
 
 	/**
@@ -70,7 +79,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 	 */
 	public function get_supported_features() {
 		// This options format is handled via only accessing options via $this->get_options()
-		return array('multi_options', 'config_templates', 'multi_storage');
+		return array('multi_options', 'config_templates', 'multi_storage', 'conditional_logic');
 	}
 
 	/**
@@ -90,14 +99,20 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 	}
 
 	/**
-	 * Check whether options have been set up by the user, or not
+	 * This method checks what app we are on and then checks the relevant options to see if they exist
 	 *
-	 * @param Array $opts - the potential options
-	 *
-	 * @return Boolean
+	 * @param  Array $opts - the array of options for Google Cloud
+	 * @return Boolean     - returns a boolean to indicate if the options are found or not
 	 */
 	public function options_exist($opts) {
-		if (is_array($opts) && !empty($opts['clientid']) && !empty($opts['secret']) && !empty($opts['bucket_path']) && !empty($opts['token'])) return true;
+		$use_master = $this->use_master($opts);
+
+		if ($use_master) {
+			if (is_array($opts) && !empty($opts['user_id']) || !empty($opts['token'])) return true;
+		} else {
+			if (is_array($opts) && !empty($opts['clientid']) && !empty($opts['secret']) && !empty($opts['bucket_path'])) return true;
+		}
+
 		return false;
 	}
 
@@ -130,7 +145,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 		if (is_wp_error($bucket)) throw new Exception("Google Cloud Storage: Error accessing or creating bucket: ".$bucket->get_error_message());
 
 
-		$storage_object = new Google_Service_Storage_StorageObject();
+		$storage_object = new UDP_Google_Service_Storage_StorageObject();
 		$storage_object->setName($path.$basename);
 		$storage_object->setBucket($bucket_name);
 
@@ -157,7 +172,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 
 			$headers = array('content-range' => "bytes */".$local_size);
 
-			$http_request = new Google_Http_Request(
+			$http_request = new UDP_Google_Http_Request(
 				$possible_location[0],
 				'PUT',
 				$headers,
@@ -221,20 +236,32 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 				$chunk = fread($handle, $this->chunk_size);
 				// Error handling??
 				$pointer += strlen($chunk);
+				
+				$start_time = microtime(true);
 				$status = $media->nextChunk($chunk);
+				
+				unset($chunk);
+
+				$extra_log = $media->getProgress();
+				
+				if (!$status && $this->chunk_size < 67108864 && microtime(true) - $start_time < 2.5 && !feof($handle) && $updraftplus->verify_free_memory($this->chunk_size * 4)) {
+					$memory_usage = round(@memory_get_usage(false)/1048576, 1);// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+					$memory_usage2 = round(@memory_get_usage(true)/1048576, 1);// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+					$this->chunk_size = $this->chunk_size * 2;
+					$extra_log .= ' - increasing chunk size to '.round($this->chunk_size/1024).' KB';
+					$extra_log .= " - memory usage: $memory_usage / $memory_usage2";
+				}
+				
 				$updraftplus->jobdata_set($transkey, array($media->updraftplus_getResumeUri(), $media->getProgress()));
-				$updraftplus->record_uploaded_chunk(round(100*$pointer/$local_size, 1), $media->getProgress(), $from);
+				$updraftplus->record_uploaded_chunk(round(100*$pointer/$local_size, 1), $extra_log, $from);
 			}
-		} catch (Google_Service_Exception $e) {
+		} catch (UDP_Google_Service_Exception $e) {
 			return $this->catch_upload_engine_exceptions($e, $handle, $try_again, $basename, $from);
-		} catch (Google_IO_Exception $e) {
+		} catch (UDP_Google_IO_Exception $e) {
 			return $this->catch_upload_engine_exceptions($e, $handle, $try_again, $basename, $from);
 		}
 
-		// The final value of $status will be the data from the API for the object
-		// that has been uploaded.
-		$result = false;// phpcs:ignore VariableAnalysis.CodeAnalysis.VariableAnalysis.UnusedVariable
-		if (false != $status) $result = $status;
+		// N.B. $status is not used in our current code from this point
 
 		fclose($handle);
 		$this->client->setDefer(false);
@@ -248,7 +275,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 	 * This function catches exceptions that can rise from uploading files to Google Cloud, it will log the exception, clean up and try the upload again.
 	 *
 	 * @param Exception $e         - the Google exception we caught
-	 * @param Object    $handle    - a file handler object that needs closing
+	 * @param Resource  $handle    - a file handler object that needs closing
 	 * @param Boolean   $try_again - indicates if we should try again
 	 * @param String    $basename  - the file basename
 	 * @param String    $from      - the file path
@@ -268,7 +295,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 		return $this->do_upload_engine($basename, $from, false);
 	}
 
-	public function do_download($file, $fullpath, $start_offset) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+	public function do_download($file, $fullpath) {// phpcs:ignore VariableAnalysis.CodeAnalysis.VariableAnalysis.UnusedVariable -- need $fullpath as its called in functions.php
 
 		global $updraftplus;
 
@@ -278,7 +305,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 		
 		try {
 			$objects = $storage->objects->listObjects($bucket, array('prefix' => $path.$file));
-		} catch (Google_Service_Exception $e) {
+		} catch (UDP_Google_Service_Exception $e) {
 			return new WP_Error('google_service_exception', sprintf(__('%s Service Exception.', 'updraftplus'), __('Google Cloud', 'updraftplus')).' '.__('You do not have access to this bucket.', 'updraftplus'));
 		}
 		
@@ -306,7 +333,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 	
 	public function chunked_download($file, $headers, $link) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
 
-		$request = $this->client->getAuth()->sign(new Google_Http_Request($link, 'GET', $headers, null));
+		$request = $this->client->getAuth()->sign(new UDP_Google_Http_Request($link, 'GET', $headers, null));
 
 		$http_request = $this->client->getIo()->makeRequest($request);
 
@@ -331,7 +358,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 		try {
 			$storage->objects->delete($bucket, $path.$file);
 			return true;
-		} catch (Google_Service_Exception $e) {
+		} catch (UDP_Google_Service_Exception $e) {
 			return new WP_Error('google_service_exception',  sprintf(__('%s Service Exception.', 'updraftplus'), __('Google Cloud', 'updraftplus')).' '.__('You do not have access to this bucket', 'updraftplus'));
 		}
 		
@@ -340,8 +367,14 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 	public function do_listfiles($match = 'backup_') {
 		$opts = $this->options;
 
-		if (empty($opts['secret']) || empty($opts['clientid']) || empty($opts['project_id']) || empty($opts['bucket_path'])) return new WP_Error('no_settings', sprintf(__('No %s settings were found', 'updraftplus'), __('Google Cloud', 'updraftplus')));
-		
+		$use_master = $this->use_master($opts);
+
+		if (!$use_master) {
+			if (empty($opts['secret']) || empty($opts['clientid']) || empty($opts['project_id']) || empty($opts['bucket_path'])) return new WP_Error('no_settings', sprintf(__('No %s settings were found', 'updraftplus'), __('Google Cloud', 'updraftplus')));
+		} else {
+			if (empty($opts['user_id']) || empty($opts['tmp_access_token']) || empty($opts['project_id']) || empty($opts['bucket_path'])) return new WP_Error('no_settings', sprintf(__('No %s settings were found', 'updraftplus'), __('Google Cloud', 'updraftplus')));
+		}
+
 		$storage = $this->get_storage();
 		if (is_wp_error($storage) || false == $storage) return $storage;
 		
@@ -349,7 +382,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 		
 		try {
 			$objects = $storage->objects->listObjects($bucket, array('prefix' => $path.$match));
-		} catch (Google_Service_Exception $e) {
+		} catch (UDP_Google_Service_Exception $e) {
 			return new WP_Error('google_service_exception', sprintf(__('%s Service Exception.', 'updraftplus'), __('Google Cloud', 'updraftplus')).' '.__('You do not have access to this bucket.', 'updraftplus'));
 		}
 		
@@ -396,17 +429,28 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 	 */
 	public function do_authenticate_storage($instance_id) {
 		$opts = $this->get_options();
-		// First, revoke any existing token, since Google doesn't appear to like issuing new ones
-		if (!empty($opts['token'])) $this->gcloud_auth_revoke();
 
-		$token = 'token'.(empty($instance_id) ? ':' . $instance_id : '');
+		$use_master = $this->use_master($opts);
+
+		// First revoke any existing token, since Google doesn't appear to like issuing new ones
+		if (!empty($opts['token']) && !$use_master) $this->gcloud_auth_revoke();
 
 		// We use 'force' here for the approval_prompt, not 'auto', as that deals better with messy situations where the user authenticated, then changed settings
+
+		// Check if there is a client ID set if there is use it otherwise use ours
+		if ($use_master) {
+			$client_id = $this->client_id;
+			$token = 'token'.$this->redirect_uri();
+		} else {
+			$client_id = $opts['clientid'];
+			$token = 'token'.(empty($instance_id) ? ':' . $instance_id : '');
+		}
+
 		$params = array(
 			'response_type' => 'code',
-			'client_id' => $opts['clientid'],
-			'redirect_uri' => $this->redirect_uri(),
-			'scope' => apply_filters('updraft_googlecloud_scope', 'https://www.googleapis.com/auth/devstorage.full_control https://www.googleapis.com/auth/userinfo.profile'),
+			'client_id' => $client_id,
+			'redirect_uri' => $this->redirect_uri($use_master),
+			'scope' => apply_filters('updraft_googlecloud_scope', 'https://www.googleapis.com/auth/devstorage.read_write https://www.googleapis.com/auth/userinfo.profile'),
 			'state' => $token,
 			'access_type' => 'offline',
 			'approval_prompt' => 'force'
@@ -470,9 +514,18 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 		}
 	}
 	
-	
-	private function redirect_uri() {
-		return UpdraftPlus_Options::admin_page_url().'?action=updraftmethod-googlecloud-auth';
+	/**
+	 * This method will return a redirect URL depending on the parameter passed. It will either return the redirect for the users site or the auth server.
+	 *
+	 * @param  Boolean $master - a Bool value to indicate if we want the master redirect URL
+	 * @return String          - A redirect URL
+	 */
+	private function redirect_uri($master = false) {
+		if ($master) {
+			return $this->callback_url;
+		} else {
+			return UpdraftPlus_Options::admin_page_url().'?action=updraftmethod-googlecloud-auth';
+		}
 	}
 	
 	/**
@@ -516,19 +569,82 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 		}
 	}
 	
-	public function do_bootstrap($opts, $connect) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+	public function do_bootstrap($opts) {
 		$storage = $this->get_storage();
 
-		if (!empty($storage) && is_object($storage) && is_a($storage, 'Google_Service_Storage')) return $storage;
+		if (!empty($storage) && is_object($storage) && is_a($storage, 'UDP_Google_Service_Storage')) return $storage;
 		
 		if (empty($opts)) $opts = $this->get_options();
 
-		if (empty($opts['token']) || empty($opts['clientid']) || empty($opts['secret'])) {
-			$this->log('this account is not authorised');
-			$this->log(__('Account is not authorized.', 'updraftplus'), 'error', 'googlecloudnotauthed');
-			return new WP_Error('not_authorized', __('Account is not authorized.', 'updraftplus').' (Google Cloud)');
+		$use_master = $this->use_master($opts);
+
+		if (!$use_master) {
+
+			if (empty($opts['token']) || empty($opts['clientid']) || empty($opts['secret'])) {
+				$this->log('this account is not authorised');
+				$this->log(__('Account is not authorized.', 'updraftplus'), 'error', 'googlecloudnotauthed');
+				return new WP_Error('not_authorized', __('Account is not authorized.', 'updraftplus').' (Google Cloud)');
+			}
+
+			$access_token = $this->access_token($opts['token'], $opts['clientid'], $opts['secret']);
+		} else {
+
+			if (!isset($opts['expires_in']) || $opts['expires_in'] < time()) {
+
+				$user_id = empty($opts['user_id']) ? '' : $opts['user_id'];
+
+				$args = array(
+					'code' => 'ud_googlecloud_code',
+					'user_id' => $user_id,
+				);
+				
+				$result = wp_remote_post($this->callback_url, array(
+					'timeout' => 60,
+					'headers' => apply_filters('updraftplus_auth_headers', ''),
+					'body' => $args
+				));
+
+				if (is_wp_error($result)) {
+				
+					$body = array('result' => 'error', 'error' => $result->get_error_code(), 'error_description' => $result->get_error_message());
+				
+				} else {
+				
+					$body_json = wp_remote_retrieve_body($result);
+
+					$body = json_decode($body_json, true);
+					
+				}
+
+				if (!empty($body['result']) && 'error' == $body['result']) {
+				
+					$access_token = new WP_Error($body['error'], empty($body['error_description']) ? __('Have not yet obtained an access token from Google - you need to authorise or re-authorise your connection to Google Cloud.', 'updraftplus') : $body['error_description']);
+				
+				} else {
+
+					$result_body_json = base64_decode($body[0]);
+					$result_body = json_decode($result_body_json);
+
+					if (isset($result_body->access_token)) {
+						$access_token = array(
+							'access_token' => $result_body->access_token,
+							'created' => time(),
+							'expires_in' => $result_body->expires_in,
+							'id_token' => $result_body->id_token,
+							'refresh_token' => ''
+						);
+
+						$opts['tmp_access_token'] = $access_token;
+						$opts['expires_in'] = $access_token['created'] + $access_token['expires_in'] - 30;
+						$this->set_options($opts, true);
+					} else {
+						$access_token = '';
+					}
+				}
+			} else {
+				$access_token = $opts['tmp_access_token'];
+			}
 		}
-		$access_token = $this->access_token($opts['token'], $opts['clientid'], $opts['secret']);
 		
 		$spl = spl_autoload_functions();
 		if (is_array($spl)) {
@@ -538,23 +654,33 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 			if (in_array('google_api_php_client_autoload', $spl)) spl_autoload_unregister('google_api_php_client_autoload');
 		}
 
-		if ((!class_exists('Google_Config') || !class_exists('Google_Client') || !class_exists('Google_Service_Storage') || !class_exists('Google_Http_Request')) && !function_exists('google_api_php_client_autoload_updraftplus')) {
+		if ((!class_exists('UDP_Google_Config') || !class_exists('UDP_Google_Client') || !class_exists('UDP_Google_Service_Storage') || !class_exists('UDP_Google_Http_Request')) && !function_exists('google_api_php_client_autoload_updraftplus')) {
 			include_once(UPDRAFTPLUS_DIR.'/includes/Google/autoload.php');
 		}
 
-		$config = new Google_Config();
-		$config->setClassConfig('Google_IO_Abstract', 'request_timeout_seconds', 60);
+		$config = new UDP_Google_Config();
+		$config->setClassConfig('UDP_Google_IO_Abstract', 'request_timeout_seconds', 60);
 		// In our testing, $storage->about->get() fails if gzip is not disabled when using the stream wrapper
 		if (!function_exists('curl_version') || !function_exists('curl_exec') || (defined('UPDRAFTPLUS_GOOGLECLOUD_DISABLEGZIP') && UPDRAFTPLUS_GOOGLECLOUD_DISABLEGZIP)) {
-			$config->setClassConfig('Google_Http_Request', 'disable_gzip', true);
+			$config->setClassConfig('UDP_Google_Http_Request', 'disable_gzip', true);
 		}
 
-		$client = new Google_Client($config);
-		$client->setClientId($opts['clientid']);
-		$client->setClientSecret($opts['secret']);
+		if (!$use_master) {
+			$client_id = $opts['clientid'];
+			$client_secret = $opts['secret'];
+			$refresh_token = $opts['token'];
+		} else {
+			$client_id = $this->client_id;
+			$client_secret = '';
+			$refresh_token = '';
+		}
+
+		$client = new UDP_Google_Client($config);
+		$client->setClientId($client_id);
+		$client->setClientSecret($client_secret);
 		$client->setApplicationName("UpdraftPlus WordPress Backups");
 		$client->setRedirectUri($this->redirect_uri());
-		$client->setScopes('https://www.googleapis.com/auth/devstorage.full_control');
+		$client->setScopes('https://www.googleapis.com/auth/devstorage.read_write');
 
 		// Do we have an access token?
 		if (empty($access_token) || is_wp_error($access_token)) {
@@ -563,10 +689,14 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 			return $access_token;
 		}
 
-		$client->setAccessToken(json_encode(array(
-			'access_token' => $access_token,
-			'refresh_token' => $opts['token']
-		)));
+		if (!$use_master) {
+			$client->setAccessToken(json_encode(array(
+				'access_token' => $access_token,
+				'refresh_token' => $refresh_token
+			)));
+		} else {
+			$client->setAccessToken(json_encode($access_token));
+		}
 
 		$io = $client->getIo();
 		$setopts = array();
@@ -574,7 +704,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 		$ssl_disableverify = isset($opts['ssl_disableverify']) ? $opts['ssl_disableverify'] : UpdraftPlus_Options::get_updraft_option('updraft_ssl_disableverify');
 		$ssl_useservercerts = isset($opts['ssl_useservercerts']) ? $opts['ssl_useservercerts'] : UpdraftPlus_Options::get_updraft_option('updraft_ssl_useservercerts');
 
-		if (is_a($io, 'Google_IO_Curl')) {
+		if (is_a($io, 'UDP_Google_IO_Curl')) {
 
 			$setopts[CURLOPT_SSL_VERIFYPEER] = $ssl_disableverify ? false : true;
 			if (!$ssl_useservercerts) $setopts[CURLOPT_CAINFO] = UPDRAFTPLUS_DIR.'/includes/cacert.pem';
@@ -582,7 +712,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 			$setopts[CURLOPT_TIMEOUT] = 60;
 			$setopts[CURLOPT_CONNECTTIMEOUT] = 15;
 			if (defined('UPDRAFTPLUS_IPV4_ONLY') && UPDRAFTPLUS_IPV4_ONLY) $setopts[CURLOPT_IPRESOLVE] = CURL_IPRESOLVE_V4;
-		} elseif (is_a($io, 'Google_IO_Stream')) {
+		} elseif (is_a($io, 'UDP_Google_IO_Stream')) {
 			$setopts['timeout'] = 60;
 			// We had to modify the SDK to support this
 			// https://wiki.php.net/rfc/tls-peer-verification - before PHP 5.6, there is no default CA file
@@ -592,7 +722,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 
 		$io->setOptions($setopts);
 
-		$storage = new Google_Service_Storage($client);
+		$storage = new UDP_Google_Service_Storage($client);
 		$this->client = $client;
 		$this->set_storage($storage);
 
@@ -660,7 +790,18 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 		
 		return $opts;
 	}
-	
+
+	/**
+	 * This function checks if the user has any options for Google Cloud saved or if they have defined to use a custom app and if they have we will not use the master Google Cloud app and allow them to enter and use their own client ID and secret
+	 *
+	 * @param  Array $opts - the Google Cloud options array
+	 * @return Bool        - a bool value to indicate if we should use the master app or not
+	 */
+	protected function use_master($opts) {
+		if ((!empty($opts['clientid']) && !empty($opts['secret'])) || (defined('UPDRAFTPLUS_CUSTOM_GOOGLECLOUD_APP') && UPDRAFTPLUS_CUSTOM_GOOGLECLOUD_APP)) return false;
+		return true;
+	}
+
 	/**
 	 * Is a multipurpose function for getting request
 	 * Is called by the authenticate link and calls auth_request or auth_token
@@ -671,8 +812,18 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 			$parts = explode(':', $_GET['state']);
 			$state = $parts[0];
 
-			if ('success' == $state) add_action('all_admin_notices', array($this, 'show_authed_admin_success'));
-			elseif ('token' == $state) $this->gcloud_auth_token();
+			if ('success' == $state) {
+				// If these are set then this is a request from the our master app and the auth server has returned these to be saved.
+				if (isset($_GET['user_id']) && isset($_GET['access_token'])) {
+					$opts = $this->get_options();
+					$opts['user_id'] = base64_decode($_GET['user_id']);
+					$opts['tmp_access_token'] = base64_decode($_GET['access_token']);
+					// Unset this value if it is set as this is a fresh auth we will set this value in the next step
+					if (isset($opts['expires_in'])) unset($opts['expires_in']);
+					$this->set_options($opts, true);
+				}
+				add_action('all_admin_notices', array($this, 'show_authed_admin_success'));
+			} elseif ('token' == $state) $this->gcloud_auth_token();
 			elseif ('revoke' == $state) $this->gcloud_auth_revoke();
 		} elseif (isset($_GET['updraftplus_googlecloudauth'])) {
 			if ('doit' == $_GET['updraftplus_googlecloudauth']) {
@@ -689,6 +840,8 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 
 		$opts = $this->get_options();
 
+		$use_master = $this->use_master($opts);
+
 		if (empty($opts['tmp_access_token'])) return;
 		$tmp_opts = $opts;
 		$tmp_opts['token'] = $opts['tmp_access_token'];
@@ -698,7 +851,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 			$this->bootstrap($tmp_opts, false);
 
 			if (false != $this->client && !is_wp_error($this->client)) {
-				$oauth2 = new Google_Service_Oauth2($this->client);
+				$oauth2 = new UDP_Google_Service_Oauth2($this->client);
 			}
 
 			if (false != $oauth2 && !empty($oauth2->userinfo)) {
@@ -712,9 +865,11 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 				} else { // If clientid or secret or both are empty, below message appears. But Authentication success or failure action occurs if user has filled both clientid and secret. In conclusion, Execution control never runs below line of code logically.
 					$message .= sprintf(__('But no %s settings were found. Please complete all fields in %s settings and save the settings.', 'updraftplus'), $this->description);
 				}
+			} else {
+				if ($use_master && empty($opts['bucket_path'])) $message .= sprintf(__('But no bucket was defined, so backups may not complete. Please enter a bucket name in the %s settings and save settings.', 'updraftplus'), $this->description);
 			}
 		} catch (Exception $e) {
-			if (is_a($e, 'Google_Service_Exception')) {
+			if (is_a($e, 'UDP_Google_Service_Exception')) {
 				$errs = $e->getErrors();
 				$message .= __('However, subsequent access attempts failed:', 'updraftplus');
 				if (is_array($errs)) {
@@ -776,9 +931,14 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 		$this->options = $this->get_options();
 		$opts = $this->options;
 
-		if (empty($opts['token']) || empty($posted_settings['clientid']) || empty($posted_settings['secret']) || $posted_settings['clientid'] != $opts['clientid'] || $posted_settings['secret'] != $opts['secret']) {
-			_e("You must save and authenticate before you can test your settings.", 'updraftplus');
-			return;
+		$use_master = $this->use_master($opts);
+
+		if (!$use_master) {
+
+			if (empty($opts['token']) || empty($posted_settings['clientid']) || empty($posted_settings['secret']) || $posted_settings['clientid'] != $opts['clientid'] || $posted_settings['secret'] != $opts['secret']) {
+				_e("You must save and authenticate before you can test your settings.", 'updraftplus');
+				return;
+			}
 		}
 
 		$ssl_useservercerts = (bool) $posted_settings['useservercerts'];
@@ -795,7 +955,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 
 		if (is_wp_error($storage)) {
 			echo __("Failed", 'updraftplus').". ";
-			foreach ($storage->get_error_messages() as $key => $msg) {
+			foreach ($storage->get_error_messages() as $msg) {
 				echo "$msg\n";
 			}
 			return;
@@ -829,18 +989,18 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 	
 		if (is_wp_error($bucket)) {
 			echo __("Failed", 'updraftplus').". ";
-			foreach ($bucket->get_error_messages() as $key => $msg) {
+			foreach ($bucket->get_error_messages() as $msg) {
 				echo "$msg\n";
 			}
 			return;
-		} elseif (!is_a($bucket, 'Google_Service_Storage_Bucket')) {
+		} elseif (!is_a($bucket, 'UDP_Google_Service_Storage_Bucket')) {
 			echo __("Failed", 'updraftplus').". (".serialize($bucket).")";
 			return;
 		}
 
 		$random_file_name = md5(rand()).'.tmp';
 
-		$storage_object = new Google_Service_Storage_StorageObject();
+		$storage_object = new UDP_Google_Service_Storage_StorageObject();
 		$storage_object->setName($random_file_name);
 		$storage_object->setBucket($bucket_name);
 		
@@ -856,7 +1016,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 			return;
 		}
 
-		if (is_a($result, 'Google_Service_Storage_StorageObject')) {
+		if (is_a($result, 'UDP_Google_Service_Storage_StorageObject')) {
 			echo __('Success', 'updraftplus').": ".__('We accessed the bucket, and were able to create files within it.', 'updraftplus')."\n";
 			try {
 				$storage->objects->delete($bucket_name, $random_file_name);
@@ -872,7 +1032,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 
 	/**
 	 * Requires project ID to actually create
-	 * Returns a Google_Service_Storage_Bucket if successful
+	 * Returns a UDP_Google_Service_Storage_Bucket if successful
 	 * Defaults to STANDARD / US, if the options are not passed and if nothing is in the saved settings
 	 *
 	 * @param  string  $bucket_name
@@ -884,7 +1044,13 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 
 		$opts = empty($this->options) ? $this->get_options() : $this->options;
 
-		if (!is_array($opts) || empty($opts['token'])) return new WP_Error('googlecloud_not_authorised', __('Account is not authorized.', 'updraftplus'));
+		$use_master = $this->use_master($opts);
+
+		if (!$use_master) {
+			if (!is_array($opts) || empty($opts['token'])) return new WP_Error('googlecloud_not_authorised', __('Account is not authorized.', 'updraftplus'));
+		} else {
+			if (!is_array($opts) || empty($opts['user_id'])) return new WP_Error('googlecloud_not_authorised', __('Account is not authorized.', 'updraftplus'));
+		}
 
 		$storage = $this->get_storage();
 
@@ -896,10 +1062,10 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 			$buckets = $storage->buckets;
 			if (is_object($buckets) && is_callable(array($buckets, 'get'))) {
 				$bucket_object = $buckets->get($bucket_name);
-				if (is_a($bucket_object, 'Google_Service_Storage_Bucket') && isset($bucket_object->name)) return $bucket_object;
+				if (is_a($bucket_object, 'UDP_Google_Service_Storage_Bucket') && isset($bucket_object->name)) return $bucket_object;
 			}
 			return new WP_Error('googlecloud_unexpected_exception', 'Google Cloud Access Error (unknown response): '.serialize($bucket_object));
-		} catch (Google_Service_Exception $e) {
+		} catch (UDP_Google_Service_Exception $e) {
 			$errors = $e->getErrors();
 			$codes = '';
 			if (is_array($errors)) {
@@ -928,7 +1094,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 
 		if (empty($opts['project_id'])) return new WP_Error('googlecloud_no_project_id', __('You must enter a project ID in order to be able to create a new bucket.', 'updraftplus'));
 
-		$bucket = new Google_Service_Storage_Bucket();
+		$bucket = new UDP_Google_Service_Storage_Bucket();
 		$bucket->setName($bucket_name);
 
 		if (false === $location) {
@@ -947,9 +1113,9 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 
 		try {
 			$bucket_object = $storage->buckets->insert($opts['project_id'], $bucket);
-			if (is_a($bucket_object, 'Google_Service_Storage_Bucket') && isset($bucket_object->name)) return $bucket_object;
+			if (is_a($bucket_object, 'UDP_Google_Service_Storage_Bucket') && isset($bucket_object->name)) return $bucket_object;
 			return new WP_Error('googlecloud_unexpected_exception', 'Google Cloud Access Error (unknown response/2): '.serialize($bucket_object));
-		} catch (Google_Service_Exception $e) {
+		} catch (UDP_Google_Service_Exception $e) {
 			$errors = $e->getErrors();
 			$codes = '';
 			if (is_array($errors)) {
@@ -959,13 +1125,15 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 						if ('notFound' == $err['reason']) {
 							$not_found = true;
 						} else {
-							$codes .= ($codes) ? ', '.$err['reason'] : $err['reason'];
+							$codes .= $codes ? ', '.$err['reason'] : $err['reason'];
 						}
 					}
 				}
 			}
 			if (empty($not_found)) {
 				return new WP_Error('google_service_exception_'.$codes, sprintf(__('%s Service Exception.', 'updraftplus'), __('Google Cloud', 'updraftplus')).' '.__('You do not have access to this bucket.', 'updraftplus').' ('.$codes.')');
+			} else {
+				return new WP_Error('google_service_exception_not_found', sprintf(__('%s Service Exception.', 'updraftplus'), __('Google Cloud', 'updraftplus')).' '.__('The specified bucket was not found.', 'updraftplus'));
 			}
 		} catch (Exception $e) {
 			return new WP_Error('google_misc_exception', 'Google Cloud Access Error ('.get_class($e).'): '.$e->getMessage(), 'updraftplus');
@@ -984,7 +1152,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 	 */
 	public function should_print_test_button() {
 		$opts = $this->get_options();
-		if (!is_array($opts) || empty($opts['token'])) return false;
+		if (!is_array($opts) || (empty($opts['token']) && empty($opts['user_id']))) return false;
 		return true;
 	}
 
@@ -996,6 +1164,8 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 	public function get_pre_configuration_template() {
 
 		$classes = $this->get_css_classes(false);
+		$opts = empty($this->options) ? $this->get_options() : $this->options;
+		$use_master = $this->use_master($opts);
 		
 		?>
 		<tr class="<?php echo $classes . ' ' . 'googlecloud_pre_config_container';?>">
@@ -1006,9 +1176,11 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 			<?php
 				$admin_page_url = UpdraftPlus_Options::admin_page_url();
 				// This is advisory - so the fact it doesn't match IPv6 addresses isn't important
-				if (preg_match('#^(https?://(\d+)\.(\d+)\.(\d+)\.(\d+))/#', $admin_page_url, $matches)) {
+				if (preg_match('#^(https?://(\d+)\.(\d+)\.(\d+)\.(\d+))/#', $admin_page_url, $matches) && !$use_master) {
 				echo '<p><strong>'.htmlspecialchars(sprintf(__("%s does not allow authorization of sites hosted on direct IP addresses. You will need to change your site's address (%s) before you can use %s for storage.", 'updraftplus'), __('Google Cloud', 'updraftplus'), $matches[1], __('Google Cloud', 'updraftplus'))).'</strong></p>';
 				} else {
+					// If we are not using the master app then show them the instructions for manual setup
+					if (!$use_master) {
 				?>
 
 				<p><a href="https://updraftplus.com/support/configuring-google-cloud-api-access-updraftplus/" target="_blank"><strong><?php _e('For longer help, including screenshots, follow this link. The description below is sufficient for more expert users.', 'updraftplus');?></strong></a></p>
@@ -1016,6 +1188,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 				<p><a href="https://console.developers.google.com" target="_blank"><?php _e('Follow this link to your Google API Console, and there activate the Storage API and create a Client ID in the API Access section.', 'updraftplus');?></a> <?php _e("Select 'Web Application' as the application type.", 'updraftplus');?></p><p><?php echo htmlspecialchars(__('You must add the following as the authorized redirect URI (under "More Options") when asked', 'updraftplus'));?>: <kbd><?php echo UpdraftPlus_Options::admin_page_url().'?action=updraftmethod-googlecloud-auth'; ?></kbd>
 				</p>
 				<?php
+					}
 				}
 			?>
 			</td>
@@ -1032,6 +1205,11 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 	public function get_configuration_template() {
 		ob_start();
 		$classes = $this->get_css_classes();
+		$opts = empty($this->options) ? $this->get_options() : $this->options;
+		$use_master = $this->use_master($opts);
+
+		// If we are not using the master app then show them the Client ID and Secret
+		if (!$use_master) {
 		?>
 		
 		<tr class="<?php echo $classes; ?>">
@@ -1046,6 +1224,9 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 			<th><?php echo __('Google Cloud', 'updraftplus').' '.__('Client Secret', 'updraftplus'); ?>:</th>
 			<td><input data-updraft_settings_test="secret" type="<?php echo apply_filters('updraftplus_admin_secret_field_type', 'password'); ?>" class="updraft_input--wide" <?php $this->output_settings_field_name_and_id('secret');?> value="{{secret}}" /></td>
 		</tr>
+		<?php
+		}
+		?>
 
 		<tr class="<?php echo $classes;?>">
 			<th><?php echo 'Google Cloud '.__('Project ID', 'updraftplus').':';?></th>
@@ -1100,9 +1281,7 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 					{{/if}}
 				</p>
 				<?php
-					echo '<p>';
 					$this->get_authentication_link();
-					echo '</p>';
 				?>
 			</td>
 		</tr>		
@@ -1141,6 +1320,21 @@ class UpdraftPlus_Addons_RemoteStorage_googlecloud extends UpdraftPlus_RemoteSto
 			'tmp_access_token',
 			'token',
 		);
+	}
+
+	/**
+	 * This function will build and return the authentication link
+	 *
+	 * @param String $instance_id - the instance id
+	 * @param String $text        - the link text
+	 *
+	 * @return String - the authentication link
+	 */
+	public function build_authentication_link($instance_id, $text) {
+		
+		$id = $this->get_id();
+
+		return '<p>'. $text .'</p><br><a data-pretext="'.$text.'" class="button-ud-google updraft_authlink" href="'.UpdraftPlus_Options::admin_page_url().'?&action=updraftmethod-'.$id.'-auth&page=updraftplus&updraftplus_'.$id.'auth=doit&updraftplus_instance='.$instance_id.'" data-instance_id="'.$instance_id.'" data-remote_method="'.$id.'">'.sprintf(__('Sign in with %s', 'updraftplus'), 'Google').'</a>';
 	}
 }
 

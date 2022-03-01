@@ -11,7 +11,7 @@ Latest Change: 1.16.24
 
 if (!defined('UPDRAFTPLUS_DIR')) die('No direct access allowed');
 
-$updraftplus_addon_moredatabase = new UpdraftPlus_Addon_MoreDatabase;
+new UpdraftPlus_Addon_MoreDatabase;
 
 class UpdraftPlus_Addon_MoreDatabase {
 
@@ -32,10 +32,12 @@ class UpdraftPlus_Addon_MoreDatabase {
 		add_filter('updraft_extradb_testconnection_go', array($this, 'extradb_testconnection_go'), 10, 2);
 		add_action('updraftplus_restore_form_db', array($this, 'restore_form_db'), 9);
 		add_filter('updraftplus_get_settings_meta', array($this, 'get_settings_meta'));
-		add_filter('updraft_backupnow_database_showmoreoptions', array($this, 'backupnow_database_showmoreoptions'), 10, 2);
+		add_filter('updraft_backupnow_database_showmoreoptions', array($this, 'backupnow_database_showmoreoptions'), 20, 2);
 		add_filter('updraft_backupnow_options', array($this, 'backupnow_options'), 10, 2);
+		add_filter('updraftplus_initial_jobdata', array($this, 'updraftplus_moredatabases_jobdata'), 10, 2);
 		add_filter('updraftplus_backup_table', array($this, 'updraftplus_backup_table'), 10, 5);
 		add_filter('updraftplus_job_option_cache', array($this, 'encryption_option_cache'), 10, 1);
+		add_action('updraftplus_backup_db_begin', array($this, 'backup_db_begin'));
 	}
 
 	public function get_settings_meta($meta) {
@@ -61,6 +63,16 @@ class UpdraftPlus_Addon_MoreDatabase {
 		$updraft_encryptionphrase = UpdraftPlus_Options::get_updraft_option('updraft_encryptionphrase');
 
 		echo '<input type="'.apply_filters('updraftplus_admin_secret_field_type', 'text').'" name="updraft_encryptionphrase" value="'.esc_attr($updraft_encryptionphrase).'"></div>';
+	}
+
+	/**
+	 * This function is called via an action; it ensures the class is setup and ready for use
+	 *
+	 * @return void
+	 */
+	public function backup_db_begin() {
+		global $updraftplus;
+		if (empty($this->database_tables)) $this->database_tables = $updraftplus->jobdata_get('database_tables', array());
 	}
 
 	public function get_table_prefix($prefix) {
@@ -240,7 +252,7 @@ class UpdraftPlus_Addon_MoreDatabase {
 			}
 		</style>
 		<script>
-			jQuery(document).ready(function($) {
+			jQuery(function($) {
 				var updraft_extra_dbs = 0;
 				function updraft_extradbs_add(host, user, name, pass, prefix) {
 					updraft_extra_dbs++;
@@ -256,7 +268,7 @@ class UpdraftPlus_Addon_MoreDatabase {
 						'<div class="updraft_backupextradbs_row_label updraft_backupextradbs_row_test"><a href="<?php echo UpdraftPlus::get_current_clean_url();?>" class="updraft_backupextradbs_row_testconnection"><?php echo esc_js(__('Test connection...', 'updraftplus'));?></a></div>'+
 						'</div>').appendTo($('#updraft_backupextradbs')).fadeIn();
 				}
-				$('#updraft_backupextradb_another').click(function(e) {
+				$('#updraft_backupextradb_another').on('click', function(e) {
 					e.preventDefault();
 					updraft_extradbs_add('', '', '', '', '');
 				});
@@ -316,7 +328,7 @@ class UpdraftPlus_Addon_MoreDatabase {
 		<?php
 	}
 
-	public function database_encryption_config($x) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+	public function database_encryption_config() {
 		$updraft_encryptionphrase = UpdraftPlus_Options::get_updraft_option('updraft_encryptionphrase');
 
 		$ret = '';
@@ -412,8 +424,6 @@ class UpdraftPlus_Addon_MoreDatabase {
 
 		global $updraftplus;
 
-		$ret = '';
-
 		$ret .= '<em>'.__('You should backup all tables unless you are an expert in the internals of the WordPress database.', 'updraftplus').'</em><br>';
 
 		// In future this can be passed an array of databases to support external databases
@@ -422,27 +432,37 @@ class UpdraftPlus_Addon_MoreDatabase {
 		$non_wp_tables = UpdraftPlus_Options::get_updraft_option('updraft_backupdb_nonwp');
 		$table_prefix = $updraftplus->get_table_prefix(false);
 		
-		foreach ($database_table_list as $key => $database) {
+		foreach ($database_table_list as $database_name => $database) {
 
 			// If we are not backing up non WordPress databases and the key is not the main WordPress database then skip it.
-			if (!$non_wp_tables && 'wp' != $key) continue;
+			if (!$non_wp_tables && 'wp' != $database_name) continue;
 
-			$database_name = $key;
-			$show_as = ('wp' == $key) ? __('WordPress database', 'updraftplus') : $key;
-			$ret .= '<br><em>'. $show_as . ' ' . __('tables', 'updraftplus') . '</em><br>';
-
-			foreach ($database as $key => $value) {
+			$checkboxes = '';
+			$non_wp_table_exists = false;
+			foreach ($database as $value) {
 
 				$checked = 'checked="checked"';
 				
 				// If we are not backing up non WordPress tables and the current table does not contain the WordPress table prefix then don't check it but add a data attribute.
-				if (!$non_wp_tables && substr($value, 0, strlen($table_prefix)) !== $table_prefix) $checked = 'data-non_wp_table="1"';
+				if (!$non_wp_tables && substr($value, 0, strlen($table_prefix)) !== $table_prefix) {
+					$checked = 'data-non_wp_table="1"';
+					if (!$non_wp_table_exists) $non_wp_table_exists = true;
+				}
 
 				/*
 					This outputs each table to the page setting the name to updraft_include_tables_ $database_name this allows the value to be trimmed later and to build an array of tables to be backed up
 				*/
-				$ret .= '<input class="updraft_db_entity" id="'.$prefix.'updraft_db_'.$value.'" '.$checked.' type="checkbox" name="updraft_include_tables_'. $database_name . '" value="'.$value.'"> <label for="'.$prefix.'updraft_db_'.$value.'">'.$value.'</label><br>';
+				$checkboxes .= '<input class="updraft_db_entity" id="'.$prefix.'updraft_db_'.$value.'" '.$checked.' type="checkbox" name="updraft_include_tables_'. $database_name . '" value="'.$value.'"> <label for="'.$prefix.'updraft_db_'.$value.'">'.$value.'</label><br>';
 			}
+
+			$ret .= '<div class="backupnow-db-tables">';
+			$links = '<a class="backupnow-select-all-table" href="#">'.__('Select all', 'updraftplus').'</a>';
+			if ($non_wp_table_exists) $links .= ' | <a class="backupnow-select-all-this-site" href="#">'.__('Select all (this site)', 'updraftplus').'</a>';
+			$links .= ' | <a class="backupnow-deselect-all-table" href="#">'.__('Deselect all', 'updraftplus').'</a><br>';
+			$show_as = ('wp' == $database_name) ? __('WordPress database', 'updraftplus') : $database_name;
+			$ret .= '<br>'.$links.'<em>'. $show_as . ' ' . __('tables', 'updraftplus') . '</em><br>';
+			$ret .= $checkboxes;
+			$ret .= '</div>';
 		}
 
 		return $ret;
@@ -470,9 +490,28 @@ class UpdraftPlus_Addon_MoreDatabase {
 			}
 
 			$this->database_tables = $database_tables;
+			$options['database_tables'] = $database_tables;
 		}
 
 		return $options;
+	}
+
+	/**
+	 * This function will set up the backup job data for when we are starting a backup that does not include all the database tables. It changes the initial jobdata so that UpdraftPlus knows what database tables to backup or skip during a resumption.
+	 *
+	 * @param array $jobdata - the initial job data that we want to change
+	 * @param array $options - options sent from the front end
+	 *
+	 * @return array         - the modified jobdata
+	 */
+	public function updraftplus_moredatabases_jobdata($jobdata, $options) {
+
+		if (!is_array($jobdata) || empty($options['database_tables'])) return $jobdata;
+
+		$jobdata[] = 'database_tables';
+		$jobdata[] = $options['database_tables'];
+
+		return $jobdata;
 	}
 
 	/**

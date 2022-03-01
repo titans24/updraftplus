@@ -3,9 +3,8 @@
 /*
 UpdraftPlus Addon: multisite:Multisite/Network
 Description: Makes UpdraftPlus compatible with a WordPress Network (a.k.a. multi-site) and adds Network-related features
-Version: 3.6
+Version: 3.8
 Shop: /shop/network-multisite/
-Latest Change: 1.15.4
 */
 // @codingStandardsIgnoreEnd
 
@@ -31,22 +30,41 @@ if (is_multisite()) {
 			return apply_filters('updraft_user_can_manage', $user_can_manage, true);
 		}
 
+		/**
+		 * The suffix for the table to store options in
+		 *
+		 * @return String
+		 */
 		public static function options_table() {
 			return 'sitemeta';
 		}
 
 		/**
-		 * Extracts the last logged message from updraftplus last process
+		 * Extracts the last logged message
 		 *
 		 * @return Mixed - Value set for the option or the default message
 		 */
 		public static function get_updraft_lastmessage() {
-			return UpdraftPlus_Options::get_updraft_option('updraft_lastmessage', __('(Nothing has been logged yet)', 'updraftplus'));
+			// Storing this in the single-row option does not combine well with SQL binary logging and frequent updates during a backup process
+			return get_site_option('updraft_lastmessage', __('(Nothing has been logged yet)', 'updraftplus'));
 		}
 
+		/**
+		 * Get the value for a specified option
+		 *
+		 * @param String $option  - the option name
+		 * @param Mixed	 $default - the default option value
+		 *
+		 * @return Mixed
+		 */
 		public static function get_updraft_option($option, $default = false) {
-			$tmp = get_site_option('updraftplus_options');
-			$ret = isset($tmp[$option]) ? $tmp[$option] : $default;
+			if ('updraft_lastmessage' == $option) {
+				// Storing this in the single-row option does not combine well with SQL binary logging and frequent updates during a backup process
+				$ret = get_site_option($option, $default);
+			} else {
+				$tmp = get_site_option('updraftplus_options');
+				$ret = isset($tmp[$option]) ? $tmp[$option] : $default;
+			}
 			return apply_filters('updraftplus_get_option', $ret, $option, $default);
 		}
 
@@ -56,14 +74,16 @@ if (is_multisite()) {
 		 * @param String  $option	 specify option name
 		 * @param String  $value	 specify option value
 		 * @param Boolean $use_cache whether or not to use the WP options cache
-		 * @param String  $autoload	 whether to autoload (takes no effect on multisite)
-		 *
 		 * @return Boolean - as from update_site_option()
 		 */
-		public static function update_updraft_option($option, $value, $use_cache = true, $autoload = 'yes') {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+		public static function update_updraft_option($option, $value, $use_cache = true) {
+			$value = apply_filters('updraftplus_update_option', $value, $option, $use_cache);
+			if ('updraft_lastmessage' == $option) {
+				return update_site_option('updraft_lastmessage', $value);
+			}
 			$tmp = get_site_option('updraftplus_options', array(), $use_cache);
 			if (!is_array($tmp)) $tmp = array();
-			$tmp[$option] = apply_filters('updraftplus_update_option', $value, $option, $use_cache);
+			$tmp[$option] = $value;
 			return update_site_option('updraftplus_options', $tmp);
 		}
 
@@ -111,6 +131,7 @@ if (is_multisite()) {
 				'updraftplus_dismissedautobackup' => 0, // Notice with information about the auto-backup add-on
 				'updraftplus_dismisseddashnotice' => 0, // Notice on the main dashboard for free users who've been using the plugin for a few weeks
 				'dismissed_general_notices_until' => 0, // Notices on the UD dashboard page
+				'dismissed_review_notice' => 0, // Review notice on the UD dashboard page
 				'dismissed_season_notices_until' => 0, // Seasonal notices on the UD dashboard page
 				'dismissed_clone_php_notices_until' => 0, // Clone PHP notice on WP Dashboard
 				'dismissed_clone_wc_notices_until' => 0, // Clone WC notice on WP Plugins page
@@ -118,7 +139,6 @@ if (is_multisite()) {
 
 				'updraft_log_syslog' => 0,
 				'updraft_ssl_nossl' => 0,
-				'updraft_auto_updates' => 0,
 				'updraft_ssl_useservercerts' => 0,
 				'updraft_ssl_disableverify' => 0,
 				'updraft_split_every' => 400,
@@ -260,7 +280,9 @@ if (is_multisite()) {
 							if ('0' == $subvalue) unset($value[$subkey]);
 						}
 					}
-					$options[$key] = $updraftplus->just_one($value);
+					$value = $updraftplus->just_one($value);
+					if (null === $value) $value = '';
+					$options[$key] = $value;
 				} elseif ('updraft_starttime_files' == $key || 'updraft_starttime_db' == $key) {
 					if (preg_match("/^([0-2]?[0-9]):([0-5][0-9])$/", $value, $matches)) {
 						$options[$key] = sprintf("%02d:%s", $matches[1], $matches[2]);
@@ -275,7 +297,7 @@ if (is_multisite()) {
 					$options[$key] = $value;
 				} elseif ('updraft_dir' == $key) {
 					$options[$key] = UpdraftPlus_Manipulation_Functions::prune_updraft_dir_prefix($value);
-				} elseif ('updraft_updraftvault' !== $key && preg_match('/^updraft_(.*)$/', $key, $matches) && in_array($matches[1], $backup_methods)) {
+				} elseif (preg_match('/^updraft_(.*)$/', $key, $matches) && in_array($matches[1], $backup_methods)) {
 					$options[$key] = call_user_func(array($updraftplus, 'storage_options_filter'), $value, $key);
 				} elseif (preg_match("/^updraft_/", $key)) {
 					$options[$key] = $value;
@@ -340,6 +362,7 @@ if (is_multisite()) {
 				add_filter('updraftplus_restore_delete_recursive', array($this, 'restore_delete_recursive'), 10, 3);
 				add_filter('updraft_move_others_preserve_existing', array($this, 'move_others_preserve_existing'), 10, 4);
 				add_filter('updraftplus_restore_move_old_mode', array($this, 'restore_move_old_mode'), 10, 3);
+				add_action('updraftplus_restore_set_table_prefix_multisite_got_new_blog_id', array($this, 'drop_existing_non_wpcore_tables'), 10, 2);
 			}
 		}
 		
@@ -351,7 +374,7 @@ if (is_multisite()) {
 			return $move_old_destination;
 		}
 
-		public function move_others_preserve_existing($preserve_existing, $been_restored, $restore_options, $ud_backup_info) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+		public function move_others_preserve_existing($preserve_existing, $been_restored, $restore_options, $ud_backup_info) {// phpcs:ignore VariableAnalysis.CodeAnalysis.VariableAnalysis.UnusedVariable -- Filter use for $ud_backup_info
 			$selective_restore_site_id = (is_array($restore_options) && !empty($restore_options['updraft_restore_ms_whichsites']) && $restore_options['updraft_restore_ms_whichsites'] > 0) ? $restore_options['updraft_restore_ms_whichsites'] : false;
 			if ($selective_restore_site_id && Updraft_Restorer::MOVEIN_MAKE_BACKUP_OF_EXISTING == $preserve_existing) {
 				$preserve_existing = Updraft_Restorer::MOVEIN_OVERWRITE_NO_BACKUP;
@@ -399,7 +422,7 @@ if (is_multisite()) {
 		 * @param  array  $backup_info
 		 * @return string
 		 */
-		public function restore_backup_move_from($move_from, $type, $restore_options, $backup_info) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+		public function restore_backup_move_from($move_from, $type, $restore_options, $backup_info) {// phpcs:ignore VariableAnalysis.CodeAnalysis.VariableAnalysis.UnusedVariable -- Filter use for $backup_info
 		
 			$selective_restore_site_id = (is_array($restore_options) && !empty($restore_options['updraft_restore_ms_whichsites']) && $restore_options['updraft_restore_ms_whichsites'] > 0) ? $restore_options['updraft_restore_ms_whichsites'] : false;
 			
@@ -486,7 +509,7 @@ if (is_multisite()) {
 		 * @param  array $backup_set          [description]
 		 * @return array
 		 */
-		public function backupable_file_entities_on_restore($backupable_entities, $restore_options, $backup_set) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+		public function backupable_file_entities_on_restore($backupable_entities, $restore_options, $backup_set) {// phpcs:ignore VariableAnalysis.CodeAnalysis.VariableAnalysis.UnusedVariable -- Filter use for $backup_set 
 
 			if (!is_array($restore_options) || !is_array($backupable_entities) || empty($backupable_entities['uploads']) || empty($restore_options['updraft_restore_ms_whichsites']) || $restore_options['updraft_restore_ms_whichsites'] < 1 || !is_multisite()) return $backupable_entities;
 
@@ -569,7 +592,7 @@ if (is_multisite()) {
 		 *
 		 * @return Boolean - returns a boolean to indicate if we should turn on WordPress maintenance mode or not
 		 */
-		public function updraftplus_single_site_maintenance_mode($filter_value, $active, $updraftplus_restorer, $wp_upgrader) {
+		public function updraftplus_single_site_maintenance_mode($filter_value, $active, $updraftplus_restorer, $wp_upgrader) {// phpcs:ignore VariableAnalysis.CodeAnalysis.VariableAnalysis.UnusedVariable -- $wp_upgrader Used in a Filter
 			
 			global $updraftplus;
 			
@@ -603,12 +626,21 @@ if (is_multisite()) {
 			$updraftplus->enqueue_select2();
 		}
 		
-		public function restore_all_downloaded_postscan($backups, $timestamp, $entities, &$info, &$mess, &$warn, &$err) {// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+		/**
+		 * After &$info, &$mess, &$warn, &$err are also available (but we are not using them currently)
+		 *
+		 * @param array 	$backups
+		 * @param timestamp $timestamp
+		 * @param array 	$entities
+		 * @param array 	$info
+		 * @return void
+		 */
+		public function restore_all_downloaded_postscan($backups, $timestamp, $entities, &$info) {
 			global $updraftplus;
 
 		// "Others", because on pre-WP-3.5-style networks, uploads are in wp-content/blogs.dir
 			// $entities is an set of index numbers, which in the common case of 1 zip only, will be '0' - so, don't test with empty()
-			if (!is_array($info) || empty($info['multisite']) || !is_array($entities) || (!isset($entities['db']) && (!isset($entities['uploads']) || get_site_option('ms_files_rewriting')) && (!isset($entities['others']) || !get_site_option('ms_files_rewriting'))) || (isset($info['same_url']) && !$info['same_url'])) return;
+			if (!is_array($info) || empty($info['multisite']) || !is_array($entities) || (!isset($entities['db']) && (!isset($entities['uploads']) || get_site_option('ms_files_rewriting')) && (!isset($entities['others']) || !get_site_option('ms_files_rewriting'))) || (isset($info['same_url']) && !$info['same_url'] && !$info['url_scheme_change'])) return;
 
 			// if (!is_array($info) || empty($info['multisite']) || empty($info['same_url'])) return $info;
 
@@ -777,8 +809,33 @@ if (is_multisite()) {
 				'href' => UpdraftPlus_Options::admin_page_url().'?page=updraftplus'
 			));
 		}
+
+		/**
+		 * Perform deletion of non WP core tables for the given Blog ID
+		 *
+		 * @param Integer $blog_id      Site Blog ID
+		 * @param String  $table_prefix System table prefix
+		 */
+		public function drop_existing_non_wpcore_tables($blog_id, $table_prefix) {
+			if (!$blog_id) return;
+			global $wpdb, $updraftplus;
+			$tables = array();
+			$blog_tables = $wpdb->tables('blog', true, (int) $blog_id);
+			foreach ($wpdb->get_results("SHOW TABLES LIKE '".$table_prefix.$blog_id."_%'") as $table) {
+				$tables = array_merge($tables, array_values(get_object_vars($table)));
+			}
+			$tables = array_unique($tables);
+			$tables = array_diff($tables, $blog_tables);
+			$suppress = $wpdb->suppress_errors();
+			foreach ($tables as $table) {
+				if (!$wpdb->query('DROP TABLE IF EXISTS '.UpdraftPlus_Manipulation_Functions::backquote(str_replace('`', '``', $table))) && !empty($wpdb->last_error)) {
+					$updraftplus->log(__METHOD__.' : '.$wpdb->last_error.' - '.$wpdb->last_query);
+				}
+			}
+			$wpdb->suppress_errors($suppress);
+		}
 	}
 	
-	$updraftplus_addon_multisite = new UpdraftPlusAddOn_MultiSite;
+	new UpdraftPlusAddOn_MultiSite;
 
 }

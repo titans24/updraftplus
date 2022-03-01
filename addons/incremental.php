@@ -3,7 +3,7 @@
 /*
 UpdraftPlus Addon: incremental:Support for incremental backups
 Description: Allows UpdraftPlus to schedule incremental file backups, which use much less resources
-Version: 1.0
+Version: 1.2
 Shop: /shop/incremental/
 Latest Change: 1.14.5
 */
@@ -11,7 +11,7 @@ Latest Change: 1.14.5
 
 if (!defined('UPDRAFTPLUS_DIR')) die('No direct access allowed');
 
-$updraftplus_addon_incremental = new UpdraftPlus_Addons_Incremental;
+new UpdraftPlus_Addons_Incremental;
 
 class UpdraftPlus_Addons_Incremental {
 
@@ -324,18 +324,30 @@ class UpdraftPlus_Addons_Incremental {
 	 * @return Array - keys are used as identifiers in the UI drop-down; values are user-displayed text describing the interval
 	 */
 	private function get_intervals() {
-		return apply_filters('updraftplus_backup_intervals_increments', array(
-			'none' => __("None", 'updraftplus'),
-			'everyhour' => __("Every hour", 'updraftplus'),
-			'every2hours' => sprintf(__("Every %s hours", 'updraftplus'), '2'),
-			'every4hours' => sprintf(__("Every %s hours", 'updraftplus'), '4'),
-			'every8hours' => sprintf(__("Every %s hours", 'updraftplus'), '8'),
-			'twicedaily' => sprintf(__("Every %s hours", 'updraftplus'), '12'),
-			'daily' => __("Daily", 'updraftplus'),
-			'weekly' => __("Weekly", 'updraftplus'),
-			'fortnightly' => __("Fortnightly", 'updraftplus'),
-			'monthly' => __("Monthly", 'updraftplus')
-		));
+		global $updraftplus;
+		if ($updraftplus->is_restricted_hosting('only_one_incremental_per_day')) {
+			$intervals = array(
+				'none' => __("None", 'updraftplus'),
+				'daily' => __("Daily", 'updraftplus'),
+				'weekly' => __("Weekly", 'updraftplus'),
+				'fortnightly' => __("Fortnightly", 'updraftplus'),
+				'monthly' => __("Monthly", 'updraftplus')
+			);
+		} else {
+			$intervals = array(
+				'none' => __("None", 'updraftplus'),
+				'everyhour' => __("Every hour", 'updraftplus'),
+				'every2hours' => sprintf(__("Every %s hours", 'updraftplus'), '2'),
+				'every4hours' => sprintf(__("Every %s hours", 'updraftplus'), '4'),
+				'every8hours' => sprintf(__("Every %s hours", 'updraftplus'), '8'),
+				'twicedaily' => sprintf(__("Every %s hours", 'updraftplus'), '12'),
+				'daily' => __("Daily", 'updraftplus'),
+				'weekly' => __("Weekly", 'updraftplus'),
+				'fortnightly' => __("Fortnightly", 'updraftplus'),
+				'monthly' => __("Monthly", 'updraftplus')
+			);
+		}
+		return apply_filters('updraftplus_backup_intervals_increments', $intervals);
 	}
 
 	/**
@@ -366,10 +378,18 @@ class UpdraftPlus_Addons_Incremental {
 	}
 
 	/**
-	 * This function will setup and check that an incremental backup can be started.
+	 * This function will setup and check that an incremental backup can be started. It is called by the WP action updraft_backup_increments (which gets scheduled)
 	 */
 	public function backup_increments() {
 		global $updraftplus;
+		
+		$selected_interval = UpdraftPlus_Options::get_updraft_option('updraft_interval_increments', 'none');
+		
+		if ('none' === $selected_interval) {
+			// Handle WP-Cron being inconsistent with the saved options
+			$updraftplus->log("No incremental backup is configured in the saved settings; will not run");
+			return;
+		}
 		
 		$running = $updraftplus->is_backup_running();
 		if ($running) {
@@ -396,7 +416,7 @@ class UpdraftPlus_Addons_Incremental {
 		$options = array('use_nonce' => $nonce);
 		$request = array('incremental' => true);
 
-		do_action('updraft_backupnow_backup', apply_filters('updraft_backupnow_options', $options, $request));
+		$updraftplus->boot_backup(true, false, false, false, false, apply_filters('updraft_backupnow_options', $options, $request));
 	}
 
 	/**
@@ -427,7 +447,7 @@ class UpdraftPlus_Addons_Incremental {
 	public function admin_footer_incremental_backups_js() {
 		?>
 		<script>
-		jQuery(document).ready(function() {
+		jQuery(function() {
 			<?php
 				$intervals = $this->get_intervals();
 				$var_int = '';
@@ -461,7 +481,7 @@ class UpdraftPlus_Addons_Incremental {
 				}
 			}
 
-			jQuery('#updraft-navtab-settings-content select.updraft_interval, #updraft-navtab-settings-content select#updraft_interval_increments').change(function() {
+			jQuery('#updraft-navtab-settings-content select.updraft_interval, #updraft-navtab-settings-content select#updraft_interval_increments').on('change', function() {
 				updraft_update_incremental_selector();
 			});
 			

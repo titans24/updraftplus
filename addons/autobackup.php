@@ -3,7 +3,7 @@
 /*
 UpdraftPlus Addon: autobackup:Automatic Backups
 Description: Save time and worry by automatically create backups before updating WordPress components
-Version: 2.6
+Version: 2.7
 Shop: /shop/autobackup/
 Latest Change: 1.12.28
 */
@@ -13,7 +13,7 @@ if (!defined('UPDRAFTPLUS_DIR')) die('No direct access allowed');
 
 if (defined('UPDRAFTPLUS_NOAUTOBACKUPS') && UPDRAFTPLUS_NOAUTOBACKUPS) return;
 
-$updraftplus_addon_autobackup = new UpdraftPlus_Addon_Autobackup;
+new UpdraftPlus_Addon_Autobackup;
 
 class UpdraftPlus_Addon_Autobackup {
 
@@ -269,7 +269,7 @@ class UpdraftPlus_Addon_Autobackup {
 			$this->is_autobackup_core = true;
 		}
 
-		$updraftplus->boot_backup($backup_files, $backup_database, $backup_files_array, true);
+		$updraftplus->boot_backup((int) $backup_files, (int) $backup_database, $backup_files_array, true);
 
 		$this->already_backed_up[] = $type;
 		if ($backup_database) $this->already_backed_up[] = 'db';
@@ -318,7 +318,9 @@ class UpdraftPlus_Addon_Autobackup {
 	 * This appears on the page listing several updates
 	 */
 	public function updraftplus_autobackup_blurb() {
-		$ret = '<input '.((UpdraftPlus_Options::get_updraft_option('updraft_autobackup_default', true)) ? 'checked="checked"' : '').' type="checkbox" id="updraft_autobackup" value="doit" name="updraft_autobackup"> <label for="updraft_autobackup">'.
+		$ret = '<div class="updraft-ad-container updated" style="display:block;">';
+		$ret .= '<h3 style="margin-top: 2px;">'. __('Be safe with an automatic backup', 'updraftplus').'</h3>';
+		$ret .= '<input '.((UpdraftPlus_Options::get_updraft_option('updraft_autobackup_default', true)) ? 'checked="checked"' : '').' type="checkbox" id="updraft_autobackup" value="doit" name="updraft_autobackup"> <label for="updraft_autobackup">'.
 		__('Automatically backup (where relevant) plugins, themes and the WordPress database with UpdraftPlus before updating', 'updraftplus').
 		'</label><br><input checked="checked" type="checkbox" value="set" name="updraft_autobackup_setdefault" id="updraft_autobackup_sdefault"> <label for="updraft_autobackup_sdefault">'.
 		__('Remember this choice for next time (you will still have the chance to change it)', 'updraftplus').
@@ -326,6 +328,7 @@ class UpdraftPlus_Addon_Autobackup {
 		// New-style widgets
 		add_action('admin_footer', array($this, 'admin_footer_inpage_backup'));
 		add_action('admin_footer', array($this, 'admin_footer_insertintoform'));
+		$ret .= '</div>';
 		return $ret;
 	}
 
@@ -335,10 +338,10 @@ class UpdraftPlus_Addon_Autobackup {
 		// Note - now, in the new-style widgetised setup (Feb 2015), we always set updraftplus_noautobackup=1 - because the actual backup will be done in-page. But that is not done here - it is done when the form is submitted, in updraft_try_inpage();
 		echo <<<ENDHERE
 		<script>
-		jQuery(document).ready(function($) {
+		jQuery(function($) {
 			$('form.upgrade').append('<input type="hidden" name="updraft_autobackup" class="updraft_autobackup_go" value="$godef">');
 			$('form.upgrade').append('<input type="hidden" name="updraft_autobackup_setdefault" class="updraft_autobackup_setdefault" value="yes">');
-			$('#updraft_autobackup').click(function() {
+			$('#updraft_autobackup').on('click', function() {
 				var doauto = $(this).attr('checked');
 				if ('checked' == doauto) {
 					$('.updraft_autobackup_go').attr('value', 'yes');
@@ -346,7 +349,7 @@ class UpdraftPlus_Addon_Autobackup {
 					$('.updraft_autobackup_go').attr('value', 'no');
 				}
 			});
-			$('#updraft_autobackup_sdefault').click(function() {
+			$('#updraft_autobackup_sdefault').on('click', function() {
 				var sdef = $(this).attr('checked');
 				if ('checked' == sdef) {
 					$('.updraft_autobackup_setdefault').attr('value', 'yes');
@@ -371,7 +374,7 @@ ENDHERE;
 
 		echo <<<ENDHERE
 			<script>
-				jQuery('h2:first').after('<p>$creating</p><p>$lastlog <span id="updraft_lastlogcontainer"></span></p><div id="updraft_activejobs"></div>');
+				jQuery('h2').first().after('<p>$creating</p><p>$lastlog <span id="updraft_lastlogcontainer"></span></p><div id="updraft_activejobs"></div>');
 				var lastlog_sdata = {
 					oneshot: 'yes'
 				};
@@ -379,7 +382,7 @@ ENDHERE;
 				function updraft_autobackup_showlastlog(repeat) {
 					updraft_send_command('activejobs_list', lastlog_sdata, function(response) {
 						try {
-							resp = JSON.parse(response);
+							resp = ud_parse_json(response);
 							if (resp.l != null) { jQuery('#updraft_lastlogcontainer').html(resp.l); }
 							if (resp.j != null && resp.j != '') {
 								jQuery('#updraft_activejobs').html(resp.j);
@@ -477,7 +480,7 @@ ENDHERE;
 					function updraft_autobackup_showlastlog(repeat) {
 						updraft_send_command('activejobs_list', lastlog_sdata, function(response) {
 							try {
-								resp = JSON.parse(response);
+								resp = ud_parse_json(response);
 								if (resp.l != null) { jQuery('#updraft_lastlogcontainer').html(resp.l); }
 								if (resp.j != null && resp.j != '') {
 									jQuery('#updraft_activejobs').html(resp.j);
@@ -545,7 +548,7 @@ ENDHERE;
 		add_filter('updraftplus_initial_jobdata', array($this, 'initial_jobdata2'));
 		add_filter('updraftplus_autobackup_extralog', array($this, 'autobackup_extralog'));
 
-		$updraftplus->boot_backup($backup_files, true, $backup_files_array, true);
+		$updraftplus->boot_backup((int) $backup_files, 1, $backup_files_array, true);
 		echo '</pre>';
 		if ($updraftplus->error_count() >0) {
 			echo '<h2>'.__("Errors have occurred:", 'updraftplus').'</h2>';
@@ -617,7 +620,7 @@ ENDHERE;
 	public function request_filesystem_credentials($input) {
 		echo <<<ENDHERE
 <script>
-	jQuery(document).ready(function() {
+	jQuery(function() {
 		jQuery('#upgrade').before('<input type="hidden" name="updraft_autobackup_answer" value="1">');
 	});
 </script>
@@ -709,7 +712,7 @@ ENDHERE;
 				// This is brought in for WP 4.7, which won't unload the page if the queue is locked. If we locked it, but don't need to keep it locked, in this situation we need to unlock it - but not otherwise.
 				var updraft_we_locked_it = false;
 				
-				jQuery(document).ready(function($) {
+				jQuery(function($) {
 
 				
 					var is_network_multisite_bulk_themes_page = ($('body.multisite.network-admin.themes-php').length > 0) ? true : false;
@@ -877,7 +880,7 @@ ENDHERE;
 										// Proceed to update via standard form submission/redirection
 										if (jQuery(passthis).find('#bulk-action-selector-top').length > 0) {
 											updraft_bulk_updates_proceed = true;
-											jQuery(passthis).submit();
+											jQuery(passthis).trigger('submit');
 										} else {
 											window.location.href = newlink;
 										}
@@ -894,21 +897,33 @@ ENDHERE;
 									// Proceed via standard form submission
 									if (jQuery(passthis).find('#bulk-action-selector-top').length > 0) {
 										updraft_bulk_updates_proceed = true;
-										jQuery(passthis).submit();
+										jQuery(passthis).trigger('submit');
 									} else {
 										window.location.href = newlink;
 									}
 								}
 							}
 						};
-						jQuery('#updraft-backupnow-inpage-modal').dialog('option', 'buttons', updraft_inpage_modal_buttons);
+						jQuery('#updraft-backupnow-inpage-modal').dialog({
+							autoOpen: false,
+							modal: true,
+							resizeOnWindowResize: true,
+							scrollWithViewport: true,
+							resizeAccordingToViewport: true,
+							useContentSize: false,
+							open: function(event, ui) {
+								jQuery(this).dialog('option', 'width', 580);
+								jQuery(this).dialog('option', 'minHeight', 261);
+								jQuery(this).dialog('option', 'height', 380);
+							},
+							buttons: updraft_inpage_modal_buttons});
 						jQuery('#updraft_inpage_backup').hide();
-						jQuery('#updraft-backupnow-inpage-modal').bind('dialogclose', function(event) {
+						jQuery('#updraft-backupnow-inpage-modal').on('dialogclose', function(event) {
 							if (updraft_actually_proceeding) { return; }
 							//shiny_updates_cancel();
 							shiny_updates_complete();
 						});
-						jQuery('#updraft-backupnow-inpage-modal').bind('dialogopen', function(event) {
+						jQuery('#updraft-backupnow-inpage-modal').on('dialogopen', function(event) {
 							var $dialog = jQuery('#updraft-backupnow-inpage-modal').parent();
 							var z_index = $dialog.css('z-index');
 							if (z_index < 10001) {
@@ -927,7 +942,7 @@ ENDHERE;
 					// N.B. - There aren't yet any shiny updates for themes (at time of coding - WP 4.4) - so, this is for the future
 					var $theme_bulk_form = jQuery('body.themes-php.multisite.network-admin form #bulk-action-selector-top');
 					if ($theme_bulk_form.length > 0) {
-						$theme_bulk_form = $theme_bulk_form.parents('form:first');
+						$theme_bulk_form = $theme_bulk_form.parents('form').first();
 						jQuery.extend($bulk_action_form, $theme_bulk_form);
 					}
 					
@@ -967,9 +982,60 @@ ENDHERE;
 						updates_intercept(e, this, true, shiny_updates, type);
 					});
 					
-					$('#plugin-information-footer').on('click', ' a.button', function(e) {
-						updates_intercept(e, this, true, shiny_updates, 'plugin');
+					$(window).on('message', function(event) {
+						var originalEvent = event.originalEvent, expectedOrigin = document.location.protocol + '//' + document.location.host, message, selector = '';
+						if ( originalEvent.origin !== expectedOrigin ) return;
+						try {
+							message = JSON.parse(originalEvent.data);
+						} catch (e) {
+							return;
+						}
+						if (!message || 'undefined' === typeof message.action) return;
+						switch (message.action) {
+							case 'update-plugin-via-update-now-link-text':
+								window.tb_remove();
+								if (wp.updates) wp.updates.<?php echo $lock_variable; ?> = true;
+								if (message.data.slug) selector = 'tr.plugin-update-tr[data-slug="'+message.data.slug+'"] a.update-link';
+								if (message.data.plugin) {
+									if (selector) selector += ', ';
+									selector += 'tr.plugin-update-tr a[href*="action=upgrade-plugin&plugin='+message.data.plugin+'"]';
+								}
+								$(selector).trigger('click');
+							break;
+						}
 					});
+					if (-1 !== window.location.pathname.indexOf('plugin-install.php')) {
+						$(window).on('load', function(e) {
+							var plugin_update_from_iframe_events = $._data(document.querySelector('div#plugin-information-footer a#plugin_update_from_iframe, div#plugin-information-footer a.button'), 'events'), plugin_update_from_iframe_event_handlers = [];
+							if ("object" === typeof plugin_update_from_iframe_events && Object.prototype.hasOwnProperty.call(plugin_update_from_iframe_events, 'click') && "[object Array]" === Object.prototype.toString.call(plugin_update_from_iframe_events.click)) {
+								for (var idx in plugin_update_from_iframe_events.click) {
+									// store all event handlers that are bound to $('#plugin_update_from_iframe') to an array variable (plugin_update_from_iframe_event_handlers)
+									plugin_update_from_iframe_event_handlers.push(plugin_update_from_iframe_events.click[idx].handler);
+								}
+							}
+							$('div#plugin-information-footer a#plugin_update_from_iframe, div#plugin-information-footer a.button').off('click');
+							$('div#plugin-information-footer a#plugin_update_from_iframe, div#plugin-information-footer a.button').on('click', function(e) {
+								e.preventDefault();
+								var target = window.parent === window ? null : window.parent;
+								$.support.postMessage = !! window.postMessage;
+								if (false === $.support.postMessage || null === target || -1 !== window.parent.location.pathname.indexOf('update-core.php')) return;
+								for	(var idx in plugin_update_from_iframe_event_handlers) {
+									// it's going to execute all event handlers that previously were bound to $('div#plugin-information-footer a#plugin_update_from_iframe, div#plugin-information-footer a.button') and were set to off
+									if ("function" === typeof plugin_update_from_iframe_event_handlers[idx]) plugin_update_from_iframe_event_handlers[idx].call(this, e);
+								}
+								message = {
+									action: 'update-plugin-via-update-now-link-text',
+									data: {
+										// get and extract query string args from the popup window and look for a plugin arg value and send it along with other data in a message
+										// e.g. window.location.search returns ?action=upgrade-plugin&plugin=updraftplus%2Fupdraftplus.php&_wpnonce=108e986d01
+										plugin: $(this).data('plugin') ? $(this).data('plugin') : decodeURIComponent(window.location.search.replace(new RegExp("^(?:.*[&\\?]" + encodeURIComponent('plugin').replace(/[\.\+\*]/g, "\\$&") + "(?:\\=([^&]*))?)?.*$", "i"), "$1")),
+										slug: $(this).data('slug')
+									}
+								};
+								target.postMessage(JSON.stringify(message), window.location.origin);
+							});
+						});
+					}
 					
 					// See: https://core.trac.wordpress.org/ticket/37512
 					
@@ -1000,7 +1066,7 @@ ENDHERE;
 
 					<?php } ?>
 
-					$('form.upgrade').submit(function() {
+					$('form.upgrade').on('submit', function() {
 						var name = $(this).attr('name');
 						var entity = 'plugins';
 						if ('upgrade' == name) {
@@ -1034,9 +1100,9 @@ ENDHERE;
 						updraft_autobackup_cleared_to_go = 1;
 						if ('wpcore' == restrict) {
 							jQuery(which_form_to_finally_submit).append('<input type="hidden" name="upgrade" value="Update Now">');
-							jQuery(which_form_to_finally_submit).submit();
+							jQuery(which_form_to_finally_submit).trigger('submit');
 						} else {
-							jQuery(which_form_to_finally_submit).submit();
+							jQuery(which_form_to_finally_submit).trigger('submit');
 						}
 					}, restrict, 'autobackup');
 					// Don't proceed with form submission yet - that's done in the callback
@@ -1045,7 +1111,11 @@ ENDHERE;
 			</script>
 			
 			<?php
-				$updraftplus_admin->add_backup_scaffolding(__('Automatic backup before update', 'updraftplus'), array($this, 'backupnow_modal_contents'));
+				if (is_object($updraftplus_admin)) {
+					$updraftplus_admin->add_backup_scaffolding(__('Automatic backup before update', 'updraftplus'), array($this, 'backupnow_modal_contents'));
+				} else {
+					error_log("UpdraftPlus_Addon_Autobackup::admin_footer_inpage_backup() - unexpected failure for accessing UpdraftPlus_Admin object");
+				}
 			?>
 			
 		<?php
